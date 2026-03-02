@@ -1,0 +1,30 @@
+secret:
+  name: events-stack-db # Name of the Kubernetes Secret containing DB_USER and DB_PASS keys for database credentials
+
+config:
+  DEBUG: "true"
+  DB_HOST: pg-cluster-rw.krateo-system.svc.cluster.local
+  DB_NAME: events-db
+  DB_PARAMS: "sslmode=disable&connect_timeout=5"
+  DB_READY_TIMEOUT: "5m"
+
+ingress:
+  enabled: true
+
+  className: "" # use default ingress class if empty. For example, in GKE, the default ingress class is "gce".
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-krateo
+    # external-dns.alpha.kubernetes.io/hostname: resources.krateoplatformops.io
+  hosts:
+    - host: resources.krateoplatformops.io
+      paths:
+        - path: /
+          pathType: Prefix
+
+  tls: []
+  # - secretName: resources-krateo-certificate
+  #   hosts:
+  #     - resources.krateoplatformops.io
+
+# curl examples:
+# curl -H "Host: resources.krateoplatformops.io" http://<LOAD_BALANCER_IP>/resources/apps%2Fv1:Deployment

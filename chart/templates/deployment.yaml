@@ -1,0 +1,112 @@
+{{- /*
+Validation block
+*/ -}}
+
+{{- $config := .Values.config | default dict }}
+{{- $secret := .Values.secret | default dict }}
+{{- $secretName := $secret.name | default "" }}
+
+{{- if and (not (hasKey $config "DB_USER")) (eq $secretName "") }}
+{{- fail "DB_USER must be set either in config or via secret.name" }}
+{{- end }}
+
+{{- if and (not (hasKey $config "DB_PASS")) (eq $secretName "") }}
+{{- fail "DB_PASS must be set either in config or via secret.name" }}
+{{- end }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "resources-proxy.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "resources-proxy.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "resources-proxy.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "resources-proxy.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "resources-proxy.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          env:
+          {{- range $k, $v := $config }}
+          - name: {{ $k }}
+            value: {{ $v | quote }}
+          {{- end }}
+
+          {{- if and (not (hasKey $config "DB_USER")) (ne $secretName "") }}
+          - name: DB_USER
+            valueFrom:
+              secretKeyRef:
+                name: {{ $secretName }}
+                key: DB_USER
+          {{- end }}
+
+          {{- if and (not (hasKey $config "DB_PASS")) (ne $secretName "") }}
+          - name: DB_PASS
+            valueFrom:
+              secretKeyRef:
+                name: {{ $secretName }}
+                key: DB_PASS
+          {{- end }}
+
+          ports:
+            - name: http
+              containerPort: {{ $config.PORT | default "8080" | int }}
+              protocol: TCP
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
