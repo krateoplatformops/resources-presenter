@@ -179,7 +179,7 @@ SQL
 Verify:
 ```bash
 docker exec -i krateo-pg psql -U krateo -d krateo -c \
-  "SELECT cluster_name, namespace, resource_name FROM krateo_resources ORDER BY updated_at DESC;"
+  "SELECT cluster_name, namespace, resource_kind, resource_name FROM krateo_resources ORDER BY updated_at DESC;"
 ```
 
 ### 4. Run the service
