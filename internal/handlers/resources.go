@@ -21,12 +21,9 @@ const (
 )
 
 // ResourcesHandler returns an HTTP handler for GET /resources/{resource_kind}.
-// The resource_kind is extracted from the URL path after "/resources/".
-//
-// Design decision: resource_kind must be provided in the full DB format
-// (e.g. "widgets.templates.krateo.io/v1beta1:Panel").
-// This avoids maintaining a short-name mapping registry and keeps the service
-// stateless. Clients must URL-encode the path segment if it contains special characters.
+// resource_kind can be a short name (e.g. "panels") or the full apiVersion:Kind
+// format (e.g. "widgets.templates.krateo.io/v1beta1:Panel"). Resolution is done
+// via the embedded resource registry; unknown kinds return 404.
 //
 // Design decision: an empty result set returns 200 with an empty items array,
 // not 404. This is consistent with Kubernetes LIST semantics — the resource kind
@@ -35,87 +32,132 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, reg *registry.Registry
 	return func(w http.ResponseWriter, r *http.Request) {
 		totalStart := time.Now()
 
+		// Per-request state for the deferred log.
+		var (
+			resourceKind   string
+			statusCode     int
+			rowsReturned   int
+			parseDuration  time.Duration
+			queryDuration  time.Duration
+			serDuration    time.Duration
+			queryErr       error
+		)
+
+		// Every request gets logged — successes and errors alike.
+		defer func() {
+			totalDuration := time.Since(totalStart)
+			lvl := slog.LevelInfo
+			if statusCode >= 500 {
+				lvl = slog.LevelError
+			} else if statusCode >= 400 {
+				lvl = slog.LevelWarn
+			}
+
+			attrs := []slog.Attr{
+				slog.String("handler", "resources"),
+				slog.String("resource_kind", resourceKind),
+				slog.Int("status_code", statusCode),
+				slog.Int("rows_returned", rowsReturned),
+				slog.Group("duration_ms",
+					slog.Float64("1_parse", float64(parseDuration.Microseconds())/1000.0),
+					slog.Float64("2_query", float64(queryDuration.Microseconds())/1000.0),
+					slog.Float64("3_serialize", float64(serDuration.Microseconds())/1000.0),
+					slog.Float64("4_total", float64(totalDuration.Microseconds())/1000.0),
+				),
+			}
+			if queryErr != nil {
+				attrs = append(attrs, slog.Any("err", queryErr))
+			}
+
+			log.LogAttrs(r.Context(), lvl, "request completed", attrs...)
+		}()
+
 		// --- Phase 1: Request parsing / validation ---
 		parseStart := time.Now()
 
-		resourceKind := strings.TrimPrefix(r.URL.Path, "/resources/")
-		if resourceKind == "" {
-			http.Error(w, "resource_kind is required in the URL path", http.StatusBadRequest)
+		params, policy, parseErr := parseRequest(r, reg)
+		parseDuration = time.Since(parseStart)
+		resourceKind = strings.TrimPrefix(r.URL.Path, "/resources/")
+
+		if parseErr != nil {
+			statusCode = parseErr.status
+			if parseErr.extra != nil {
+				writeJSON(w, statusCode, parseErr.extra)
+			} else {
+				writeJSONError(w, statusCode, parseErr.msg)
+			}
 			return
 		}
-
-		// Resolve short name (e.g. "panels") or full format (e.g. "widgets.templates.krateo.io/v1beta1:Panel")
-		// to the canonical DB format. Only resources listed in resources.yaml are served.
-		def, ok := reg.Resolve(resourceKind)
-		if !ok {
-			http.Error(w,
-				fmt.Sprintf("unknown resource kind %q; available: %v", resourceKind, reg.ShortNames()),
-				http.StatusNotFound,
-			)
-			return
-		}
-		// log both the requested resource kind and the resolved DBKind for observability.
-		log.Debug("handling request",
-			slog.String("handler", "resources"),
-			slog.String("requested_resource_kind", resourceKind),
-			slog.String("resolved_db_kind", def.DBKind),
-		)
-
-		params, err := parseListParams(r, def.DBKind)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("invalid parameters: %v", err), http.StatusBadRequest)
-			return
-		}
-
-		// TODO(auth): populate from verified JWT/session claims.
-		policy := access.PolicyFromRequest(r)
-
-		parseDuration := time.Since(parseStart)
 
 		// --- Phase 2: DB query execution ---
 		queryStart := time.Now()
 
 		result, err := sql.ListResources(r.Context(), db, params, policy)
+		queryDuration = time.Since(queryStart)
 		if err != nil {
-			log.Error("query failed",
-				slog.String("handler", "resources"),
-				slog.String("resource_kind", resourceKind),
-				slog.Any("err", err),
-			)
-			http.Error(w, "internal server error", http.StatusInternalServerError)
+			queryErr = err
+			statusCode = http.StatusInternalServerError
+			writeJSONError(w, statusCode, "internal server error")
 			return
 		}
-
-		queryDuration := time.Since(queryStart)
 
 		// --- Phase 3: Response serialization ---
 		serializeStart := time.Now()
 
+		statusCode = http.StatusOK
+		rowsReturned = len(result.Items)
 		w.Header().Set("Content-Type", "application/json")
+		// Serialization errors are rare (broken connection). Already committed
+		// the 200 status at this point, so just let the defer log it.
 		if err := json.NewEncoder(w).Encode(result); err != nil {
-			log.Error("response serialization failed",
-				slog.String("handler", "resources"),
-				slog.String("resource_kind", resourceKind),
-				slog.Any("err", err),
-			)
-			return
+			queryErr = fmt.Errorf("serialize: %w", err)
 		}
 
-		serializeDuration := time.Since(serializeStart)
-		totalDuration := time.Since(totalStart)
-
-		// --- Structured latency log ---
-		log.Info("request completed",
-			slog.String("handler", "resources"),
-			slog.String("resource_kind", resourceKind),
-			slog.Float64("parse_ms", float64(parseDuration.Microseconds())/1000.0),
-			slog.Float64("query_duration_ms", float64(queryDuration.Microseconds())/1000.0),
-			slog.Float64("serialize_ms", float64(serializeDuration.Microseconds())/1000.0),
-			slog.Float64("total_duration_ms", float64(totalDuration.Microseconds())/1000.0),
-			slog.Int("rows_returned", len(result.Items)),
-			slog.Int("status_code", http.StatusOK),
-		)
+		serDuration = time.Since(serializeStart)
 	}
+}
+
+// handlerError carries an HTTP status and message for parse-phase errors.
+type handlerError struct {
+	status int
+	msg    string
+	extra  map[string]any // if non-nil, used instead of {"error": msg}
+}
+
+// parseRequest validates the URL, resolves the resource kind, and extracts query params.
+// Returns (params, policy, nil) on success, or (zero, nil, *handlerError) on failure.
+func parseRequest(r *http.Request, reg *registry.Registry) (sql.ListParams, *access.Policy, *handlerError) {
+	resourceKind := strings.TrimPrefix(r.URL.Path, "/resources/")
+	if resourceKind == "" {
+		return sql.ListParams{}, nil, &handlerError{
+			status: http.StatusBadRequest,
+			msg:    "resource_kind is required in the URL path",
+		}
+	}
+
+	def, ok := reg.Resolve(resourceKind)
+	if !ok {
+		return sql.ListParams{}, nil, &handlerError{
+			status: http.StatusNotFound,
+			extra: map[string]any{
+				"error":     fmt.Sprintf("unknown resource kind %q", resourceKind),
+				"available": reg.ShortNames(),
+			},
+		}
+	}
+
+	params, err := parseListParams(r, def.DBKind)
+	if err != nil {
+		return sql.ListParams{}, nil, &handlerError{
+			status: http.StatusBadRequest,
+			msg:    fmt.Sprintf("invalid parameters: %v", err),
+		}
+	}
+
+	// TODO(auth): populate from verified JWT/session claims.
+	policy := access.PolicyFromRequest(r)
+
+	return params, policy, nil
 }
 
 func parseListParams(r *http.Request, resourceKind string) (sql.ListParams, error) {
@@ -147,4 +189,16 @@ func parseListParams(r *http.Request, resourceKind string) (sql.ListParams, erro
 	}
 
 	return p, nil
+}
+
+// writeJSON writes an arbitrary value as JSON with the given status code.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v) //nolint:errcheck
+}
+
+// writeJSONError writes a JSON error response: {"error": "message"}.
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
 }

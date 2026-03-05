@@ -233,7 +233,76 @@ func TestResourcesRawFlag(t *testing.T) {
 	}
 }
 
-// --- Integration test: missing resource_kind returns 400 ---
+// --- Integration test: unknown resource_kind returns 404 with JSON ---
+
+func TestResourcesUnknownKind(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
+
+	req := httptest.NewRequest("GET", "/resources/unknown", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Response must be JSON.
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("expected application/json, got %q", ct)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+
+	// Must have "error" and "available" keys.
+	if _, ok := body["error"]; !ok {
+		t.Fatal("expected 'error' key in response")
+	}
+	avail, ok := body["available"]
+	if !ok {
+		t.Fatal("expected 'available' key in response")
+	}
+	availList, ok := avail.([]any)
+	if !ok || len(availList) == 0 {
+		t.Fatalf("expected non-empty available list, got %v", avail)
+	}
+}
+
+// --- Integration test: short name resolution ---
+
+func TestResourcesShortName(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedResources(t, db, seedOptions{
+		Cluster:      "cluster-a",
+		Namespace:    "default",
+		ResourceKind: "apps/v1:Deployment",
+		Count:        5,
+		StartTime:    now,
+		Delta:        time.Second,
+	})
+
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
+
+	// Use the short name "deployments" instead of the full "apps/v1:Deployment".
+	resp := callResources(t, handler, "deployments", "", 50)
+	items := extractItems(t, resp)
+	if len(items) != 5 {
+		t.Fatalf("short name resolution: expected 5 items, got %d", len(items))
+	}
+}
+
+// --- Integration test: missing resource_kind returns 400 with JSON ---
 
 func TestResourcesMissingKind(t *testing.T) {
 	db, cleanup := setupTestPostgres(t)
@@ -248,6 +317,103 @@ func TestResourcesMissingKind(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
+
+	// Response must be JSON.
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("expected application/json, got %q", ct)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if _, ok := body["error"]; !ok {
+		t.Fatal("expected 'error' key in response")
+	}
+}
+
+// --- Unit test: parseRequest (no Docker needed) ---
+
+func TestParseRequest(t *testing.T) {
+	reg := testRegistry(t)
+
+	tests := []struct {
+		name       string
+		url        string
+		wantStatus int    // 0 means success (no error)
+		wantKind   string // expected resolved DBKind on success
+	}{
+		{
+			name:     "valid short name",
+			url:      "/resources/deployments",
+			wantKind: "apps/v1:Deployment",
+		},
+		{
+			name:     "valid full format",
+			url:      "/resources/apps/v1:Deployment",
+			wantKind: "apps/v1:Deployment",
+		},
+		{
+			name:       "unknown kind returns 404",
+			url:        "/resources/unknown",
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "empty path returns 400",
+			url:        "/resources/",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:     "query params parsed correctly",
+			url:      "/resources/deployments?cluster=c1&namespace=ns1&raw=true&limit=42",
+			wantKind: "apps/v1:Deployment",
+		},
+		{
+			name:       "invalid limit returns 400",
+			url:        "/resources/deployments?limit=abc",
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tt.url, nil)
+			params, _, herr := parseRequest(req, reg)
+
+			if tt.wantStatus != 0 {
+				if herr == nil {
+					t.Fatalf("expected error with status %d, got nil", tt.wantStatus)
+				}
+				if herr.status != tt.wantStatus {
+					t.Fatalf("expected status %d, got %d: %s", tt.wantStatus, herr.status, herr.msg)
+				}
+				return
+			}
+
+			if herr != nil {
+				t.Fatalf("unexpected error: %d %s", herr.status, herr.msg)
+			}
+			if params.ResourceKind != tt.wantKind {
+				t.Fatalf("expected ResourceKind=%q, got %q", tt.wantKind, params.ResourceKind)
+			}
+
+			// Verify query params for the params test case.
+			if tt.name == "query params parsed correctly" {
+				if params.Cluster != "c1" {
+					t.Fatalf("expected Cluster=c1, got %q", params.Cluster)
+				}
+				if params.Namespace != "ns1" {
+					t.Fatalf("expected Namespace=ns1, got %q", params.Namespace)
+				}
+				if !params.Raw {
+					t.Fatal("expected Raw=true")
+				}
+				if params.Limit != 42 {
+					t.Fatalf("expected Limit=42, got %d", params.Limit)
+				}
+			}
+		})
+	}
 }
 
 // --- Helpers ---
@@ -256,7 +422,7 @@ func setupTestPostgres(t *testing.T) (*pgxpool.Pool, func()) {
 	t.Helper()
 	ctx := context.Background()
 
-	container, err := postgres.RunContainer(ctx,
+	container, err := postgres.Run(ctx, "postgres:18-alpine",
 		postgres.WithDatabase("testdb"),
 		postgres.WithUsername("test"),
 		postgres.WithPassword("test"),
