@@ -16,6 +16,7 @@ import (
 	"github.com/krateoplatformops/resources-proxy/internal/config"
 	"github.com/krateoplatformops/resources-proxy/internal/handlers"
 	"github.com/krateoplatformops/resources-proxy/internal/probes"
+	"github.com/krateoplatformops/resources-proxy/internal/registry"
 	pgutil "github.com/krateoplatformops/resources-proxy/internal/util/pg"
 	"github.com/krateoplatformops/plumbing/server/use"
 	"github.com/krateoplatformops/plumbing/server/use/cors"
@@ -38,11 +39,18 @@ func main() {
 	defer pool.Close()
 	cfg.Log.Info("PostgreSQL is ready.")
 
+	reg, err := registry.Load()
+	if err != nil {
+		cfg.Log.Error("cannot load resource registry", slog.Any("err", err))
+		os.Exit(1)
+	}
+	cfg.Log.Info("Resource registry loaded", slog.Int("count", len(reg.ShortNames())))
+
 	health := probes.New(pool)
 
 	// HTTP server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/resources/", handlers.ResourcesHandler(pool, cfg.Log))
+	mux.HandleFunc("/resources/", handlers.ResourcesHandler(pool, cfg.Log, reg))
 	mux.HandleFunc("/livez", health.LivenessHandler())
 	mux.HandleFunc("/readyz", health.ReadinessHandler())
 

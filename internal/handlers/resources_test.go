@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/krateoplatformops/resources-proxy/internal/registry"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -20,6 +21,24 @@ import (
 // testLogger returns a discard logger for tests.
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+}
+
+// testRegistry builds a registry that includes the resource kinds used in tests.
+func testRegistry(t *testing.T) *registry.Registry {
+	t.Helper()
+	reg, err := registry.NewFromYAML([]byte(`
+resources:
+  - shortName: deployments
+    apiVersion: apps/v1
+    kind: Deployment
+  - shortName: panels
+    apiVersion: widgets.templates.krateo.io/v1beta1
+    kind: Panel
+`))
+	if err != nil {
+		t.Fatalf("testRegistry: %v", err)
+	}
+	return reg
 }
 
 // --- Integration test: multi-page pagination ---
@@ -41,7 +60,7 @@ func TestResourcesPagination_MultiPage(t *testing.T) {
 		Delta:        time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
 
 	const pageSize = 100
 
@@ -120,7 +139,7 @@ func TestResourcesFilter_NamespaceAndCluster(t *testing.T) {
 		Delta:        time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
 
 	// Filter by cluster only.
 	resp := callResourcesWithFilters(t, handler, "apps/v1:Deployment", map[string]string{
@@ -179,7 +198,7 @@ func TestResourcesRawFlag(t *testing.T) {
 		Delta:        time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
 
 	// Without raw: items should have no raw field.
 	resp := callResources(t, handler, "apps/v1:Deployment", "", 50)
@@ -220,7 +239,7 @@ func TestResourcesMissingKind(t *testing.T) {
 	db, cleanup := setupTestPostgres(t)
 	defer cleanup()
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
 
 	req := httptest.NewRequest("GET", "/resources/", nil)
 	rec := httptest.NewRecorder()
@@ -277,6 +296,8 @@ func setupTestPostgres(t *testing.T) (*pgxpool.Pool, func()) {
 
 func applySchema(t *testing.T, db *pgxpool.Pool) {
 	t.Helper()
+
+	//TODO: align with real schema
 
 	// krateo_resources schema — matches deviser/internal/config/assets/resources.schema.sql
 	schema := `

@@ -11,26 +11,27 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/krateoplatformops/resources-proxy/internal/access"
+	"github.com/krateoplatformops/resources-proxy/internal/registry"
 	"github.com/krateoplatformops/resources-proxy/internal/sql"
 )
 
 const (
-	defaultLimit = 50
-	maxLimit     = 200
+	defaultLimit = 100
+	maxLimit     = 5000
 )
 
 // ResourcesHandler returns an HTTP handler for GET /resources/{resource_kind}.
 // The resource_kind is extracted from the URL path after "/resources/".
 //
 // Design decision: resource_kind must be provided in the full DB format
-// (e.g. "widgets.templates.krateo.io/v1beta1:Panel" or "apps/v1:Deployment").
+// (e.g. "widgets.templates.krateo.io/v1beta1:Panel").
 // This avoids maintaining a short-name mapping registry and keeps the service
 // stateless. Clients must URL-encode the path segment if it contains special characters.
 //
 // Design decision: an empty result set returns 200 with an empty items array,
 // not 404. This is consistent with Kubernetes LIST semantics — the resource kind
 // is valid, there are just no instances matching the filters.
-func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
+func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, reg *registry.Registry) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		totalStart := time.Now()
 
@@ -43,7 +44,24 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		params, err := parseListParams(r, resourceKind)
+		// Resolve short name (e.g. "panels") or full format (e.g. "widgets.templates.krateo.io/v1beta1:Panel")
+		// to the canonical DB format. Only resources listed in resources.yaml are served.
+		def, ok := reg.Resolve(resourceKind)
+		if !ok {
+			http.Error(w,
+				fmt.Sprintf("unknown resource kind %q; available: %v", resourceKind, reg.ShortNames()),
+				http.StatusNotFound,
+			)
+			return
+		}
+		// log both the requested resource kind and the resolved DBKind for observability.
+		log.Debug("handling request",
+			slog.String("handler", "resources"),
+			slog.String("requested_resource_kind", resourceKind),
+			slog.String("resolved_db_kind", def.DBKind),
+		)
+
+		params, err := parseListParams(r, def.DBKind)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("invalid parameters: %v", err), http.StatusBadRequest)
 			return

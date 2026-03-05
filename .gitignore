@@ -39,3 +39,6 @@ experiments/**
 # Go workspace
 go.work
 go.work.sum
+
+PROMPT.md
+PROGRESS.md
