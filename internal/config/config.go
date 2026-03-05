@@ -8,8 +8,8 @@ import (
 	"time"
 
 	logutil "github.com/krateoplatformops/resources-proxy/internal/util/log"
-	pgutil "github.com/krateoplatformops/resources-proxy/internal/util/pg"
 	"github.com/krateoplatformops/plumbing/env"
+	"github.com/krateoplatformops/plumbing/pgutil"
 )
 
 const (

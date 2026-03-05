@@ -60,6 +60,11 @@ func (b *Builder) Limit(n int) {
 //
 // It returns the rendered SQL string and the ordered list of
 // arguments to be passed to the database driver.
+//
+// WARNING: Render mutates b.args when a LIMIT is set (it appends the limit value).
+// This means calling Render twice on the same Builder produces incorrect results.
+// If reuse is ever needed, Render should work on a copy of b.args instead.
+// For now, every call site creates a fresh Builder so this is safe.
 func (b *Builder) Render(baseSQL string) (string, []any) {
 	var sb strings.Builder
 	sb.WriteString(baseSQL)

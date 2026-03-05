@@ -147,6 +147,10 @@ func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) 
 	}
 
 	// TODO(auth): when policy is non-nil, add access control filters here.
+	// NOTE: The ANY(?) clauses below rely on pgx automatically encoding []string
+	// as a PostgreSQL array parameter. If the database driver is ever changed, this
+	// implicit conversion may break. The positional parameter ($N) receives a Go
+	// slice which pgx serializes as '{val1,val2,...}'.
 	if policy != nil {
 		if len(policy.AllowedNamespaces) > 0 {
 			b.Where("namespace = ANY(?)", policy.AllowedNamespaces)

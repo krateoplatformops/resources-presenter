@@ -233,7 +233,7 @@ func TestResourcesRawFlag(t *testing.T) {
 	}
 }
 
-// --- Integration test: unknown resource_kind returns 404 with JSON ---
+// --- Integration test: unknown resource_kind returns 404 with Kubernetes Status ---
 
 func TestResourcesUnknownKind(t *testing.T) {
 	db, cleanup := setupTestPostgres(t)
@@ -259,17 +259,16 @@ func TestResourcesUnknownKind(t *testing.T) {
 		t.Fatalf("response is not valid JSON: %v", err)
 	}
 
-	// Must have "error" and "available" keys.
-	if _, ok := body["error"]; !ok {
-		t.Fatal("expected 'error' key in response")
+	// Kubernetes-style Status response from plumbing/http/response.
+	if body["kind"] != "Status" {
+		t.Fatalf("expected kind=Status, got %v", body["kind"])
 	}
-	avail, ok := body["available"]
-	if !ok {
-		t.Fatal("expected 'available' key in response")
+	if body["reason"] != "NotFound" {
+		t.Fatalf("expected reason=NotFound, got %v", body["reason"])
 	}
-	availList, ok := avail.([]any)
-	if !ok || len(availList) == 0 {
-		t.Fatalf("expected non-empty available list, got %v", avail)
+	msg, _ := body["message"].(string)
+	if msg == "" {
+		t.Fatal("expected non-empty message in Status response")
 	}
 }
 
@@ -302,7 +301,7 @@ func TestResourcesShortName(t *testing.T) {
 	}
 }
 
-// --- Integration test: missing resource_kind returns 400 with JSON ---
+// --- Integration test: missing resource_kind returns 400 with Kubernetes Status ---
 
 func TestResourcesMissingKind(t *testing.T) {
 	db, cleanup := setupTestPostgres(t)
@@ -327,8 +326,13 @@ func TestResourcesMissingKind(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("response is not valid JSON: %v", err)
 	}
-	if _, ok := body["error"]; !ok {
-		t.Fatal("expected 'error' key in response")
+
+	// Kubernetes-style Status response from plumbing/http/response.
+	if body["kind"] != "Status" {
+		t.Fatalf("expected kind=Status, got %v", body["kind"])
+	}
+	if body["reason"] != "BadRequest" {
+		t.Fatalf("expected reason=BadRequest, got %v", body["reason"])
 	}
 }
 
@@ -372,6 +376,16 @@ func TestParseRequest(t *testing.T) {
 			name:       "invalid limit returns 400",
 			url:        "/resources/deployments?limit=abc",
 			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "invalid composition_id returns 400",
+			url:        "/resources/deployments?composition_id=not-a-uuid",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:     "valid composition_id accepted",
+			url:      "/resources/deployments?composition_id=550e8400-e29b-41d4-a716-446655440000",
+			wantKind: "apps/v1:Deployment",
 		},
 	}
 

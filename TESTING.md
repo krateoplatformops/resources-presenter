@@ -16,16 +16,16 @@ All tests require Docker to be running (testcontainers starts a Postgres contain
 
 ```bash
 # Run all tests
-go test ./...
+go test ./... -cover
 
 # Unit tests only (SQL layer, fast, uses pgxmock)
-go test ./internal/sql/ -v
+go test ./internal/sql/ -cover -v
 
 # Integration tests only (handler layer, uses testcontainers)
-go test ./internal/handlers/ -v
+go test ./internal/handlers/ -cover -v
 
 # Registry tests (no Docker needed)
-go test ./internal/registry/ -v
+go test ./internal/registry/ -cover -v
 ```
 
 ## Local manual testing (curl)

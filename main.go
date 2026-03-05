@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,9 +14,9 @@ import (
 
 	"github.com/krateoplatformops/resources-proxy/internal/config"
 	"github.com/krateoplatformops/resources-proxy/internal/handlers"
-	"github.com/krateoplatformops/resources-proxy/internal/probes"
 	"github.com/krateoplatformops/resources-proxy/internal/registry"
-	pgutil "github.com/krateoplatformops/resources-proxy/internal/util/pg"
+	"github.com/krateoplatformops/plumbing/pgutil"
+	"github.com/krateoplatformops/plumbing/server/probes"
 	"github.com/krateoplatformops/plumbing/server/use"
 	"github.com/krateoplatformops/plumbing/server/use/cors"
 )
@@ -37,22 +36,19 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
-	cfg.Log.Info("PostgreSQL is ready.")
+	cfg.Log.Info("PostgreSQL is ready")
 
 	reg, err := registry.Load()
 	if err != nil {
 		cfg.Log.Error("cannot load resource registry", slog.Any("err", err))
 		os.Exit(1)
 	}
-	cfg.Log.Info("Resource registry loaded", slog.Int("count", len(reg.ShortNames())))
-
-	health := probes.New(pool)
+	cfg.Log.Info("resource registry loaded", slog.Int("count", len(reg.ShortNames())))
 
 	// HTTP server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/resources/", handlers.ResourcesHandler(pool, cfg.Log, reg))
-	mux.HandleFunc("/livez", health.LivenessHandler())
-	mux.HandleFunc("/readyz", health.ReadinessHandler())
+	probes.Register(mux, cfg.Log, pool, time.Second)
 
 	chain := use.NewChain(
 		use.CORS(cors.Options{
@@ -81,27 +77,24 @@ func main() {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		log.Printf("Starting HTTP server on port %d", cfg.Port)
+		cfg.Log.Info("starting HTTP server", slog.Int("port", cfg.Port))
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
 	}()
 
-	health.SetReady(true)
-	log.Println("Application is ready")
+	cfg.Log.Info("application is ready")
 
 	// --- WAIT FOR SHUTDOWN SIGNAL OR SERVER ERROR ---
 	select {
 	case <-rootCtx.Done():
-		log.Println("Shutdown signal received")
+		cfg.Log.Info("shutdown signal received")
 	case err := <-serverErr:
-		log.Printf("Server error: %v", err)
+		cfg.Log.Error("server error", slog.Any("err", err))
 	}
 
 	// --- GRACEFUL SHUTDOWN ---
-	health.SetShutdownStarted()
-	health.SetReady(false)
-	log.Println("Starting graceful shutdown...")
+	cfg.Log.Info("starting graceful shutdown")
 
 	var wg sync.WaitGroup
 
@@ -111,12 +104,12 @@ func main() {
 		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancelShutdown()
 		if err := server.Shutdown(shutdownCtx); err != nil {
-			log.Printf("HTTP server shutdown error: %v", err)
+			cfg.Log.Error("HTTP server shutdown error", slog.Any("err", err))
 		} else {
-			log.Println("HTTP server stopped gracefully")
+			cfg.Log.Info("HTTP server stopped gracefully")
 		}
 	}()
 
 	wg.Wait()
-	log.Println("Graceful shutdown complete")
+	cfg.Log.Info("graceful shutdown complete")
 }

@@ -1,15 +1,18 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/krateoplatformops/plumbing/http/response"
 	"github.com/krateoplatformops/resources-proxy/internal/access"
 	"github.com/krateoplatformops/resources-proxy/internal/registry"
 	"github.com/krateoplatformops/resources-proxy/internal/sql"
@@ -18,7 +21,11 @@ import (
 const (
 	defaultLimit = 100
 	maxLimit     = 5000
+	queryTimeout = 10 * time.Second
 )
+
+// uuidRegex validates UUID format (RFC 4122).
+var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // ResourcesHandler returns an HTTP handler for GET /resources/{resource_kind}.
 // resource_kind can be a short name (e.g. "panels") or the full apiVersion:Kind
@@ -34,13 +41,13 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, reg *registry.Registry
 
 		// Per-request state for the deferred log.
 		var (
-			resourceKind   string
-			statusCode     int
-			rowsReturned   int
-			parseDuration  time.Duration
-			queryDuration  time.Duration
-			serDuration    time.Duration
-			queryErr       error
+			resourceKind  string
+			statusCode    int
+			rowsReturned  int
+			parseDuration time.Duration
+			queryDuration time.Duration
+			serDuration   time.Duration
+			queryErr      error
 		)
 
 		// Every request gets logged — successes and errors alike.
@@ -81,37 +88,44 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, reg *registry.Registry
 
 		if parseErr != nil {
 			statusCode = parseErr.status
-			if parseErr.extra != nil {
-				writeJSON(w, statusCode, parseErr.extra)
-			} else {
-				writeJSONError(w, statusCode, parseErr.msg)
-			}
+			response.Encode(w, response.New(parseErr.status, fmt.Errorf("%s", parseErr.msg)))
 			return
 		}
 
 		// --- Phase 2: DB query execution ---
 		queryStart := time.Now()
 
-		result, err := sql.ListResources(r.Context(), db, params, policy)
+		queryCtx, queryCancel := context.WithTimeout(r.Context(), queryTimeout)
+		defer queryCancel()
+
+		result, err := sql.ListResources(queryCtx, db, params, policy)
 		queryDuration = time.Since(queryStart)
 		if err != nil {
 			queryErr = err
 			statusCode = http.StatusInternalServerError
-			writeJSONError(w, statusCode, "internal server error")
+			response.InternalError(w, fmt.Errorf("internal server error"))
 			return
 		}
 
 		// --- Phase 3: Response serialization ---
+		// Pre-marshal to a buffer to avoid committing a 200 status with a
+		// truncated body if serialization fails partway through.
 		serializeStart := time.Now()
+
+		data, err := json.Marshal(result)
+		if err != nil {
+			queryErr = fmt.Errorf("serialize: %w", err)
+			statusCode = http.StatusInternalServerError
+			response.InternalError(w, fmt.Errorf("response serialization failed"))
+			serDuration = time.Since(serializeStart)
+			return
+		}
 
 		statusCode = http.StatusOK
 		rowsReturned = len(result.Items)
 		w.Header().Set("Content-Type", "application/json")
-		// Serialization errors are rare (broken connection). Already committed
-		// the 200 status at this point, so just let the defer log it.
-		if err := json.NewEncoder(w).Encode(result); err != nil {
-			queryErr = fmt.Errorf("serialize: %w", err)
-		}
+		w.WriteHeader(http.StatusOK)
+		w.Write(data)
 
 		serDuration = time.Since(serializeStart)
 	}
@@ -121,7 +135,6 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, reg *registry.Registry
 type handlerError struct {
 	status int
 	msg    string
-	extra  map[string]any // if non-nil, used instead of {"error": msg}
 }
 
 // parseRequest validates the URL, resolves the resource kind, and extracts query params.
@@ -139,10 +152,7 @@ func parseRequest(r *http.Request, reg *registry.Registry) (sql.ListParams, *acc
 	if !ok {
 		return sql.ListParams{}, nil, &handlerError{
 			status: http.StatusNotFound,
-			extra: map[string]any{
-				"error":     fmt.Sprintf("unknown resource kind %q", resourceKind),
-				"available": reg.ShortNames(),
-			},
+			msg:    fmt.Sprintf("unknown resource kind %q; available: %v", resourceKind, reg.ShortNames()),
 		}
 	}
 
@@ -178,27 +188,24 @@ func parseListParams(r *http.Request, resourceKind string) (sql.ListParams, erro
 		limit = maxLimit
 	}
 
+	compositionID := q.Get("composition_id")
+	if compositionID != "" && !uuidRegex.MatchString(compositionID) {
+		return sql.ListParams{}, fmt.Errorf("invalid composition_id: not a valid UUID")
+	}
+
+	// Design decision: the spec suggested ?after_updated_at=<ts>&after_id=<id> as
+	// explicit cursor fields. We use an opaque ?cursor=<base64> token instead.
+	// Benefits: cleaner API surface, no leaked internal column names, easier to
+	// evolve the cursor format without breaking clients.
 	p := sql.ListParams{
 		ResourceKind:  resourceKind,
 		Cluster:       q.Get("cluster"),
 		Namespace:     q.Get("namespace"),
-		CompositionID: q.Get("composition_id"),
+		CompositionID: compositionID,
 		Raw:           q.Get("raw") == "true",
 		Limit:         limit,
 		Cursor:        sql.EncodedCursor(q.Get("cursor")),
 	}
 
 	return p, nil
-}
-
-// writeJSON writes an arbitrary value as JSON with the given status code.
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v) //nolint:errcheck
-}
-
-// writeJSONError writes a JSON error response: {"error": "message"}.
-func writeJSONError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }
