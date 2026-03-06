@@ -104,14 +104,14 @@ SQL
 
 ### 3. (Optional) Seed sample data
 
-Generates 30 Panel resources across different clusters, namespaces, and dashboard themes:
+Generates 500 Panel resources across different clusters, namespaces, and dashboard themes:
 
 ```bash
 docker exec -i krateo-pg psql -U krateo -d krateo <<'SQL'
 DO $$
 DECLARE
   clusters   TEXT[] := ARRAY['prod-eu', 'prod-us', 'staging', 'dev'];
-  namespaces TEXT[] := ARRAY['krateo-system', 'team-alpha', 'team-beta', 'monitoring'];
+  namespaces TEXT[] := ARRAY['krateo-system', 'demo-system', 'ns-1', 'ns-2'];
   titles     TEXT[] := ARRAY['Blueprints', 'Deployments', 'Costs', 'Pipelines', 'Alerts', 'Metrics', 'Logs', 'Clusters', 'Users', 'Quotas'];
   sections   TEXT[] := ARRAY['dashboard', 'overview', 'admin'];
   c TEXT; ns TEXT; title TEXT; sec TEXT;
@@ -120,13 +120,14 @@ DECLARE
   name_val TEXT;
   raw_val JSONB;
 BEGIN
-  FOREACH c IN ARRAY clusters LOOP
-    FOREACH ns IN ARRAY namespaces[1:2] LOOP            -- 2 namespaces per cluster
-      FOR ti IN 1..array_length(titles, 1) LOOP
-        IF i > 30 THEN RETURN; END IF;
+  FOR rep IN 1..7 LOOP                                  -- repeat to reach 500
+    FOREACH c IN ARRAY clusters LOOP
+      FOREACH ns IN ARRAY namespaces[1:2] LOOP          -- 2 namespaces per cluster
+        FOR ti IN 1..array_length(titles, 1) LOOP
+          IF i > 500 THEN RETURN; END IF;
         title  := titles[ti];
         sec    := sections[1 + (i % array_length(sections, 1))];
-        name_val := sec || '-' || lower(replace(title, ' ', '-')) || '-panel';
+        name_val := sec || '-' || lower(replace(title, ' ', '-')) || '-panel-' || i;
         uid_val  := 'uid-' || lpad(i::TEXT, 4, '0');
 
         raw_val := jsonb_build_object(
@@ -168,7 +169,8 @@ BEGIN
            c, uid_val, c || ':' || uid_val, ns,
            'widgets.templates.krateo.io/v1beta1:Panel', name_val, raw_val);
 
-        i := i + 1;
+          i := i + 1;
+        END LOOP;
       END LOOP;
     END LOOP;
   END LOOP;
@@ -198,9 +200,11 @@ curl -s http://localhost:8080/resources/panels | jq
 
 # List panels with full raw objects
 curl -s 'http://localhost:8080/resources/panels?raw=true' | jq
+# TODO: myabe instead of raw=true, full=true or something more explicit (to be implemented)
 
 # Filter by namespace
 curl -s 'http://localhost:8080/resources/panels?namespace=krateo-system' | jq
+# TODO: maybe not namespace but namespaces=ns1,ns2 (to be implemented)
 
 # Unknown resource kind (returns 404)
 curl -s http://localhost:8080/resources/unknown

@@ -39,6 +39,7 @@ type ResourceItem struct {
 
 // ListResult is the full response for a list query.
 type ListResult struct {
+	Count  int            `json:"count"`
 	Items  []ResourceItem `json:"items"`
 	Cursor EncodedCursor  `json:"cursor,omitempty"`
 }
@@ -122,6 +123,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams, policy *access
 		})
 	}
 
+	result.Count = len(items)
 	result.Items = items
 	return result, nil
 }
