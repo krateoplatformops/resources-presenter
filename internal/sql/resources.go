@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/krateoplatformops/resources-proxy/internal/access"
+	"github.com/krateoplatformops/resources-presenter/internal/access"
 )
 
 // Querier abstracts the pgx query interface so it can be mocked in tests.

@@ -1,6 +1,6 @@
 # `/resources/{resource_kind}` Search Guide
 
-This document explains how to query `/resources/{resource_kind}` in resource-proxy.
+This document explains how to query `/resources/{resource_kind}` in resources-presenter.
 
 Supported methods:
 

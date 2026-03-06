@@ -1,6 +1,6 @@
 apiVersion: v2
-name: resources-proxy
-description: Helm chart for resources-proxy service
+name: resources-presenter
+description: Helm chart for resources-presenter service
 type: application
 
 # Placeholder SOLO per sviluppo locale

@@ -2,15 +2,15 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: {{ include "resources-proxy.fullname" . }}
+  name: {{ include "resources-presenter.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "resources-proxy.labels" . | nindent 4 }}
+    {{- include "resources-presenter.labels" . | nindent 4 }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "resources-proxy.fullname" . }}
+    name: {{ include "resources-presenter.fullname" . }}
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:

@@ -1,15 +1,15 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "resources-proxy.fullname" . }}-resources
+  name: {{ include "resources-presenter.fullname" . }}-resources
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "resources-proxy.labels" . | nindent 4 }}
+    {{- include "resources-presenter.labels" . | nindent 4 }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "resources-proxy.serviceAccountName" . }}
+    name: {{ include "resources-presenter.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 roleRef:
   kind: Role
-  name: {{ include "resources-proxy.fullname" . }}-resources
+  name: {{ include "resources-presenter.fullname" . }}-resources
   apiGroup: rbac.authorization.k8s.io

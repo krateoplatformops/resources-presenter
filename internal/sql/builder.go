@@ -15,7 +15,7 @@ import (
 // they are added.
 //
 // Copied from events-presenter/internal/sql/builder.go and adapted
-// for resources-proxy.
+// for resources-presenter.
 type Builder struct {
 	where   []string
 	args    []any

@@ -17,17 +17,17 @@ Validation block
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "resources-proxy.fullname" . }}
+  name: {{ include "resources-presenter.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "resources-proxy.labels" . | nindent 4 }}
+    {{- include "resources-presenter.labels" . | nindent 4 }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
     matchLabels:
-      {{- include "resources-proxy.selectorLabels" . | nindent 6 }}
+      {{- include "resources-presenter.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       {{- with .Values.podAnnotations }}
@@ -35,7 +35,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
-        {{- include "resources-proxy.labels" . | nindent 8 }}
+        {{- include "resources-presenter.labels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -44,7 +44,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "resources-proxy.serviceAccountName" . }}
+      serviceAccountName: {{ include "resources-presenter.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:

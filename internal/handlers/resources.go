@@ -14,9 +14,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/krateoplatformops/plumbing/http/response"
-	"github.com/krateoplatformops/resources-proxy/internal/access"
-	"github.com/krateoplatformops/resources-proxy/internal/registry"
-	"github.com/krateoplatformops/resources-proxy/internal/sql"
+	"github.com/krateoplatformops/resources-presenter/internal/access"
+	"github.com/krateoplatformops/resources-presenter/internal/registry"
+	"github.com/krateoplatformops/resources-presenter/internal/sql"
 )
 
 const (

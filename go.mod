@@ -1,4 +1,4 @@
-module github.com/krateoplatformops/resources-proxy
+module github.com/krateoplatformops/resources-presenter
 
 go 1.25.5
 

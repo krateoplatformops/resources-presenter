@@ -28,16 +28,16 @@ COPY main.go main.go
 ARG COMMIT_HASH
 
 # Build
-RUN CGO_ENABLED=0 GO111MODULE=on go build -a -ldflags "-X main.Build=${COMMIT_HASH}" -o /bin/resources-proxy ./main.go && \
-    strip /bin/resources-proxy
+RUN CGO_ENABLED=0 GO111MODULE=on go build -a -ldflags "-X main.Build=${COMMIT_HASH}" -o /bin/resources-presenter ./main.go && \
+    strip /bin/resources-presenter
 
 # Deployment environment
 # ----------------------
 FROM gcr.io/distroless/static:nonroot
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /bin/resources-proxy /bin/resources-proxy
+COPY --from=builder /bin/resources-presenter /bin/resources-presenter
 
 USER nonroot:nonroot
 
-ENTRYPOINT ["/bin/resources-proxy"]
+ENTRYPOINT ["/bin/resources-presenter"]

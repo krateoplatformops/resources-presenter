@@ -7,13 +7,13 @@ import (
 	"os"
 	"time"
 
-	logutil "github.com/krateoplatformops/resources-proxy/internal/util/log"
 	"github.com/krateoplatformops/plumbing/env"
 	"github.com/krateoplatformops/plumbing/pgutil"
+	logutil "github.com/krateoplatformops/resources-presenter/internal/util/log"
 )
 
 const (
-	serviceName           = "resources-proxy"
+	serviceName           = "resources-presenter"
 	defaultDbReadyTimeout = 4 * time.Minute
 	defaultDebug          = false
 )

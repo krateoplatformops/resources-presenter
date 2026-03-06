@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/krateoplatformops/resources-proxy/internal/access"
+	"github.com/krateoplatformops/resources-presenter/internal/access"
 	"github.com/pashagolub/pgxmock/v4"
 )
 

@@ -1,10 +1,10 @@
-# resource-proxy
+# resources-presenter
 
 Read-only HTTP API for querying current Kubernetes resource state stored in PostgreSQL.
 
 ## Overview
 
-`resource-proxy` serves the current state of a set of Kubernetes resources (one row per resource, identified by `global_uid`). It does **not** ingest data, it reads from a `krateo_resources` table populated by an another component: [resources-ingester](https://github.com/krateoplatformops/resources-ingester).
+`resources-presenter` serves the current state of a set of Kubernetes resources (one row per resource, identified by `global_uid`). It does **not** ingest data, it reads from a `krateo_resources` table populated by an another component: [resources-ingester](https://github.com/krateoplatformops/resources-ingester).
 
 Key features:
 

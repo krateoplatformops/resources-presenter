@@ -49,7 +49,7 @@ docker run -d --name krateo-pg \
 docker exec -i krateo-pg psql -U krateo -d krateo < assets/resources.schema.sql
 ```
 
-### 3. (Optional) Seed sample data
+### 3. Seed sample data
 
 Generates 500 Panel resources across different clusters, namespaces, and dashboard themes:
 

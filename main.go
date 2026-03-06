@@ -12,13 +12,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/krateoplatformops/resources-proxy/internal/config"
-	"github.com/krateoplatformops/resources-proxy/internal/handlers"
-	"github.com/krateoplatformops/resources-proxy/internal/registry"
 	"github.com/krateoplatformops/plumbing/pgutil"
 	"github.com/krateoplatformops/plumbing/server/probes"
 	"github.com/krateoplatformops/plumbing/server/use"
 	"github.com/krateoplatformops/plumbing/server/use/cors"
+	"github.com/krateoplatformops/resources-presenter/internal/config"
+	"github.com/krateoplatformops/resources-presenter/internal/handlers"
+	"github.com/krateoplatformops/resources-presenter/internal/registry"
 )
 
 func main() {
