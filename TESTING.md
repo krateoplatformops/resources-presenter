@@ -46,60 +46,7 @@ docker run -d --name krateo-pg \
 ### 2. Create the schema
 
 ```bash
-docker exec -i krateo-pg psql -U krateo -d krateo <<'SQL'
-CREATE TABLE IF NOT EXISTS krateo_resources (
-    -- Timestamps for ingestion and updates
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-
-    -- Stable row id for deterministic keyset pagination
-    id                BIGINT GENERATED ALWAYS AS IDENTITY,
-
-    -- Cluster / object identity
-    cluster_name      TEXT NOT NULL,
-    uid               TEXT NOT NULL,
-    global_uid        TEXT NOT NULL, -- cluster_name:uid
-
-    namespace         TEXT NOT NULL,
-    resource_kind     TEXT NOT NULL, -- include apiVersion, e.g. apps/v1:Deployment
-    resource_name     TEXT NOT NULL,
-
-    -- Optional domain identifier
-    composition_id    UUID NULL,
-
-    -- Full Kubernetes object
-    raw               JSONB NOT NULL,
-
-    PRIMARY KEY (id)
-);
-
--- One current row per physical Kubernetes object.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_krateo_resources_global_uid
-ON krateo_resources (global_uid);
-
--- Fast listing by API resource type with stable keyset pagination.
-CREATE INDEX IF NOT EXISTS idx_krateo_resources_kind_page
-ON krateo_resources (resource_kind, updated_at DESC, id DESC);
-
--- Common direct lookups.
-CREATE INDEX IF NOT EXISTS idx_krateo_resources_obj
-ON krateo_resources (cluster_name, namespace, resource_kind, resource_name);
-
--- Optional composition filter.
-CREATE INDEX IF NOT EXISTS idx_krateo_resources_composition
-ON krateo_resources (composition_id, updated_at DESC, id DESC)
-WHERE composition_id IS NOT NULL;
-
--- Generic metadata.* filtering (name/namespace/labels/annotations/...).
-CREATE INDEX IF NOT EXISTS idx_krateo_resources_metadata
-ON krateo_resources
-USING GIN ((raw->'metadata'));
-
--- Generic raw filtering using containment/jsonpath predicates.
-CREATE INDEX IF NOT EXISTS idx_krateo_resources_raw
-ON krateo_resources
-USING GIN (raw jsonb_path_ops);
-SQL
+docker exec -i krateo-pg psql -U krateo -d krateo < assets/resources.schema.sql
 ```
 
 ### 3. (Optional) Seed sample data
@@ -107,75 +54,7 @@ SQL
 Generates 500 Panel resources across different clusters, namespaces, and dashboard themes:
 
 ```bash
-docker exec -i krateo-pg psql -U krateo -d krateo <<'SQL'
-DO $$
-DECLARE
-  clusters   TEXT[] := ARRAY['prod-eu', 'prod-us', 'staging', 'dev'];
-  namespaces TEXT[] := ARRAY['krateo-system', 'demo-system', 'ns-1', 'ns-2'];
-  titles     TEXT[] := ARRAY['Blueprints', 'Deployments', 'Costs', 'Pipelines', 'Alerts', 'Metrics', 'Logs', 'Clusters', 'Users', 'Quotas'];
-  sections   TEXT[] := ARRAY['dashboard', 'overview', 'admin'];
-  c TEXT; ns TEXT; title TEXT; sec TEXT;
-  i INT := 1;
-  uid_val TEXT;
-  name_val TEXT;
-  raw_val JSONB;
-BEGIN
-  FOR rep IN 1..7 LOOP                                  -- repeat to reach 500
-    FOREACH c IN ARRAY clusters LOOP
-      FOREACH ns IN ARRAY namespaces[1:2] LOOP          -- 2 namespaces per cluster
-        FOR ti IN 1..array_length(titles, 1) LOOP
-          IF i > 500 THEN RETURN; END IF;
-        title  := titles[ti];
-        sec    := sections[1 + (i % array_length(sections, 1))];
-        name_val := sec || '-' || lower(replace(title, ' ', '-')) || '-panel-' || i;
-        uid_val  := 'uid-' || lpad(i::TEXT, 4, '0');
-
-        raw_val := jsonb_build_object(
-          'apiVersion', 'widgets.templates.krateo.io/v1beta1',
-          'kind',       'Panel',
-          'metadata',   jsonb_build_object(
-            'name',      name_val,
-            'namespace', ns,
-            'labels',    jsonb_build_object('app.kubernetes.io/part-of', sec),
-            'annotations', jsonb_build_object('krateo.io/verbose', (i % 2 = 0)::TEXT)
-          ),
-          'spec', jsonb_build_object(
-            'widgetData', jsonb_build_object(
-              'title',   title,
-              'actions', '{}'::jsonb,
-              'items',   jsonb_build_array(
-                jsonb_build_object('resourceRefId', name_val || '-row')
-              )
-            ),
-            'resourcesRefs', jsonb_build_object(
-              'items', jsonb_build_array(
-                jsonb_build_object(
-                  'id',         name_val || '-row',
-                  'apiVersion', 'widgets.templates.krateo.io/v1beta1',
-                  'name',       name_val || '-row',
-                  'namespace',  ns,
-                  'resource',   'rows',
-                  'verb',       'GET'
-                )
-              )
-            )
-          )
-        );
-
-        INSERT INTO krateo_resources
-          (updated_at, cluster_name, uid, global_uid, namespace, resource_kind, resource_name, raw)
-        VALUES
-          (now() - (i || ' minutes')::INTERVAL,
-           c, uid_val, c || ':' || uid_val, ns,
-           'widgets.templates.krateo.io/v1beta1:Panel', name_val, raw_val);
-
-          i := i + 1;
-        END LOOP;
-      END LOOP;
-    END LOOP;
-  END LOOP;
-END $$;
-SQL
+docker exec -i krateo-pg psql -U krateo -d krateo < assets/seed_data.sql
 ```
 
 Verify:
@@ -194,17 +73,34 @@ DB_USER=krateo DB_PASS=krateo DB_HOST=localhost DB_NAME=krateo \
 
 ### 5. Test with curl
 
+#### GET examples
+
 ```bash
 # List panels (short name)
 curl -s http://localhost:8080/resources/panels | jq
 
 # List panels with full raw objects
 curl -s 'http://localhost:8080/resources/panels?raw=true' | jq
-# TODO: myabe instead of raw=true, full=true or something more explicit (to be implemented)
 
 # Filter by namespace
 curl -s 'http://localhost:8080/resources/panels?namespace=krateo-system' | jq
-# TODO: maybe not namespace but namespaces=ns1,ns2 (to be implemented)
+
+# Filter by cluster + namespace
+curl -s 'http://localhost:8080/resources/panels?cluster=prod-eu&namespace=krateo-system' | jq
+
+# Search by name (case-insensitive, partial match)
+curl -s 'http://localhost:8080/resources/panels?name=blueprints' | jq
+
+# Filter by labels
+curl -s 'http://localhost:8080/resources/panels?labels=%7B%22app.kubernetes.io%2Fpart-of%22%3A%22dashboard%22%7D' | jq
+
+# Filter by time (resources updated after a given date)
+curl -s 'http://localhost:8080/resources/panels?since=2026-03-01T00:00:00Z' | jq
+
+# Pagination (page 1, then page 2)
+curl -s 'http://localhost:8080/resources/panels?limit=10' | jq
+# copy cursor from response, then:
+curl -s 'http://localhost:8080/resources/panels?limit=10&cursor=<CURSOR>' | jq
 
 # Unknown resource kind (returns 404)
 curl -s http://localhost:8080/resources/unknown
@@ -212,6 +108,69 @@ curl -s http://localhost:8080/resources/unknown
 # Health probes
 curl -s http://localhost:8080/livez
 curl -s http://localhost:8080/readyz
+```
+
+#### POST examples
+
+```bash
+# Basic query with filters
+curl -s -X POST http://localhost:8080/resources/panels \
+  -H 'Content-Type: application/json' \
+  -d '{"namespace": "krateo-system"}' | jq
+
+# Multiple filters + raw
+curl -s -X POST http://localhost:8080/resources/panels \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "cluster": "prod-eu",
+    "namespace": "krateo-system",
+    "name": "blueprints",
+    "raw": true,
+    "limit": 10
+  }' | jq
+
+# Filter by labels (note: labels is a JSON object, not a string)
+curl -s -X POST http://localhost:8080/resources/panels \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "labels": {"app.kubernetes.io/part-of": "dashboard"},
+    "limit": 50
+  }' | jq
+
+# Filter by time
+curl -s -X POST http://localhost:8080/resources/panels \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "since": "2026-03-01T00:00:00Z",
+    "limit": 100
+  }' | jq
+
+# Pagination via POST (page 1)
+curl -s -X POST http://localhost:8080/resources/panels \
+  -H 'Content-Type: application/json' \
+  -d '{"cluster": "prod-eu", "limit": 10}' | jq
+
+# Pagination via POST (page 2 — use cursor from page 1)
+curl -s -X POST http://localhost:8080/resources/panels \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "cluster": "prod-eu",
+    "limit": 10,
+    "cursor": "<CURSOR_FROM_PAGE_1>"
+  }' | jq
+
+# All filters combined
+curl -s -X POST http://localhost:8080/resources/panels \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "cluster": "prod-eu",
+    "namespace": "krateo-system",
+    "name": "blueprints",
+    "labels": {"app.kubernetes.io/part-of": "dashboard"},
+    "since": "2026-03-01T00:00:00Z",
+    "raw": true,
+    "limit": 50
+  }' | jq
 ```
 
 ### 6. Cleanup

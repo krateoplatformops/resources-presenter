@@ -22,17 +22,24 @@ type ListParams struct {
 	Cluster       string
 	Namespace     string
 	CompositionID string // UUID as string; empty means no filter
+	Name          string // case-insensitive partial match (ILIKE %name%)
+	Labels        string // raw JSON string for JSONB containment (@>)
+	Since         *time.Time
 	Raw           bool
 	Limit         int
 	Cursor        EncodedCursor
 }
 
-// ResourceItem is the minimal response DTO for a single resource.
+// ResourceItem is the response DTO for a single resource.
 type ResourceItem struct {
-	Name       string `json:"name"`
-	Namespace  string `json:"namespace"`
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
+	Name          string    `json:"name"`
+	Namespace     string    `json:"namespace"`
+	APIVersion    string    `json:"apiVersion"`
+	Kind          string    `json:"kind"`
+	ClusterName   string    `json:"cluster_name"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	CompositionID *string   `json:"composition_id,omitempty"`
 	// Raw is included only when the raw=true query parameter is set.
 	Raw json.RawMessage `json:"raw,omitempty"`
 }
@@ -69,31 +76,41 @@ func ListResources(ctx context.Context, db Querier, p ListParams, policy *access
 
 	for rows.Next() {
 		var (
-			resourceName string
-			namespace    string
-			resourceKind string
-			id           int64
-			updatedAt    time.Time
-			rawJSON      []byte
+			resourceName  string
+			namespace     string
+			resourceKind  string
+			clusterName   string
+			createdAt     time.Time
+			updatedAt     time.Time
+			compositionID *string
+			id            int64
+			rawJSON       []byte
 		)
 
+		scanDest := []any{
+			&resourceName, &namespace, &resourceKind,
+			&clusterName, &createdAt, &updatedAt, &compositionID,
+			&id,
+		}
 		if p.Raw {
-			if err := rows.Scan(&resourceName, &namespace, &resourceKind, &id, &updatedAt, &rawJSON); err != nil {
-				return nil, fmt.Errorf("scan: %w", err)
-			}
-		} else {
-			if err := rows.Scan(&resourceName, &namespace, &resourceKind, &id, &updatedAt); err != nil {
-				return nil, fmt.Errorf("scan: %w", err)
-			}
+			scanDest = append(scanDest, &rawJSON)
+		}
+
+		if err := rows.Scan(scanDest...); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
 		}
 
 		apiVersion, kind := splitResourceKind(resourceKind)
 
 		item := ResourceItem{
-			Name:       resourceName,
-			Namespace:  namespace,
-			APIVersion: apiVersion,
-			Kind:       kind,
+			Name:          resourceName,
+			Namespace:     namespace,
+			APIVersion:    apiVersion,
+			Kind:          kind,
+			ClusterName:   clusterName,
+			CreatedAt:     createdAt,
+			UpdatedAt:     updatedAt,
+			CompositionID: compositionID,
 		}
 		if p.Raw && rawJSON != nil {
 			item.Raw = json.RawMessage(rawJSON)
@@ -123,6 +140,9 @@ func ListResources(ctx context.Context, db Querier, p ListParams, policy *access
 		})
 	}
 
+	if items == nil {
+		items = []ResourceItem{}
+	}
 	result.Count = len(items)
 	result.Items = items
 	return result, nil
@@ -146,6 +166,18 @@ func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) 
 
 	if p.CompositionID != "" {
 		b.Where("composition_id = ?", p.CompositionID)
+	}
+
+	if p.Name != "" {
+		b.Where("resource_name ILIKE ?", "%"+p.Name+"%")
+	}
+
+	if p.Labels != "" {
+		b.Where("raw->'metadata'->'labels' @> ?::jsonb", p.Labels)
+	}
+
+	if p.Since != nil {
+		b.Where("updated_at >= ?", *p.Since)
 	}
 
 	// TODO(auth): when policy is non-nil, add access control filters here.
@@ -177,7 +209,7 @@ func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) 
 	b.Limit(p.Limit + 1)
 
 	// Columns
-	cols := "resource_name, namespace, resource_kind, id, updated_at"
+	cols := "resource_name, namespace, resource_kind, cluster_name, created_at, updated_at, composition_id, id"
 	if p.Raw {
 		cols += ", raw"
 	}

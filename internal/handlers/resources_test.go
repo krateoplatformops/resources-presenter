@@ -1,13 +1,16 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -336,6 +339,344 @@ func TestResourcesMissingKind(t *testing.T) {
 	}
 }
 
+// --- Integration test: name search (case-insensitive partial match) ---
+
+func TestResourcesFilter_Name(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	// Seed resources with varied names.
+	seedResourcesWithLabels(t, db, seedLabelsOptions{
+		Cluster:      "cluster-a",
+		Namespace:    "prod",
+		ResourceKind: "apps/v1:Deployment",
+		StartTime:    now,
+		Delta:        time.Second,
+		Resources: []seedResource{
+			{Name: "my-api-service", Labels: map[string]string{"app": "api"}},
+			{Name: "api-gateway", Labels: map[string]string{"app": "api"}},
+			{Name: "frontend-app", Labels: map[string]string{"app": "frontend"}},
+			{Name: "API-v2", Labels: map[string]string{"app": "api"}},
+		},
+	})
+
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
+
+	// Search for "api" — should match "my-api-service", "api-gateway", "API-v2" (case-insensitive).
+	resp := callResourcesWithFilters(t, handler, "deployments", map[string]string{
+		"name": "api",
+	})
+	items := extractItems(t, resp)
+	if len(items) != 3 {
+		t.Fatalf("name filter 'api': expected 3 items, got %d", len(items))
+	}
+
+	// Search for "frontend" — should match only "frontend-app".
+	resp = callResourcesWithFilters(t, handler, "deployments", map[string]string{
+		"name": "frontend",
+	})
+	items = extractItems(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("name filter 'frontend': expected 1 item, got %d", len(items))
+	}
+
+	// Search for non-existing name returns empty.
+	resp = callResourcesWithFilters(t, handler, "deployments", map[string]string{
+		"name": "nonexistent",
+	})
+	items = extractItems(t, resp)
+	if len(items) != 0 {
+		t.Fatalf("name filter 'nonexistent': expected 0 items, got %d", len(items))
+	}
+}
+
+// --- Integration test: labels filter (JSONB containment) ---
+
+func TestResourcesFilter_Labels(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedResourcesWithLabels(t, db, seedLabelsOptions{
+		Cluster:      "cluster-a",
+		Namespace:    "prod",
+		ResourceKind: "apps/v1:Deployment",
+		StartTime:    now,
+		Delta:        time.Second,
+		Resources: []seedResource{
+			{Name: "nginx-1", Labels: map[string]string{"app": "nginx", "tier": "backend"}},
+			{Name: "nginx-2", Labels: map[string]string{"app": "nginx", "tier": "frontend"}},
+			{Name: "redis", Labels: map[string]string{"app": "redis", "tier": "backend"}},
+		},
+	})
+
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
+
+	// Filter by single label.
+	resp := callResourcesWithFilters(t, handler, "deployments", map[string]string{
+		"labels": url.QueryEscape(`{"app":"nginx"}`),
+	})
+	items := extractItems(t, resp)
+	if len(items) != 2 {
+		t.Fatalf("labels filter app=nginx: expected 2 items, got %d", len(items))
+	}
+
+	// Filter by two labels (AND — both must match).
+	resp = callResourcesWithFilters(t, handler, "deployments", map[string]string{
+		"labels": url.QueryEscape(`{"app":"nginx","tier":"backend"}`),
+	})
+	items = extractItems(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("labels filter app=nginx+tier=backend: expected 1 item, got %d", len(items))
+	}
+
+	// Non-matching labels returns empty.
+	resp = callResourcesWithFilters(t, handler, "deployments", map[string]string{
+		"labels": url.QueryEscape(`{"app":"nonexistent"}`),
+	})
+	items = extractItems(t, resp)
+	if len(items) != 0 {
+		t.Fatalf("labels filter nonexistent: expected 0 items, got %d", len(items))
+	}
+}
+
+// --- Integration test: since filter ---
+
+func TestResourcesFilter_Since(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	// Seed 10 resources, each 1 hour apart.
+	seedResources(t, db, seedOptions{
+		Cluster:      "cluster-a",
+		Namespace:    "prod",
+		ResourceKind: "apps/v1:Deployment",
+		Count:        10,
+		StartTime:    now,
+		Delta:        time.Hour,
+	})
+
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
+
+	// Since 5 hours ago: should get 5 resources (updated_at >= now-5h).
+	sinceTime := now.Add(-4*time.Hour - 30*time.Minute) // between res-4 and res-5
+	resp := callResourcesWithFilters(t, handler, "deployments", map[string]string{
+		"since": sinceTime.Format(time.RFC3339),
+	})
+	items := extractItems(t, resp)
+	if len(items) != 5 {
+		t.Fatalf("since filter: expected 5 items, got %d", len(items))
+	}
+}
+
+// --- Integration test: POST method support ---
+
+func TestResourcesPOST_BasicQuery(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedResources(t, db, seedOptions{
+		Cluster:      "cluster-a",
+		Namespace:    "prod",
+		ResourceKind: "apps/v1:Deployment",
+		Count:        5,
+		StartTime:    now,
+		Delta:        time.Second,
+	})
+	seedResources(t, db, seedOptions{
+		Cluster:      "cluster-b",
+		Namespace:    "staging",
+		ResourceKind: "apps/v1:Deployment",
+		Count:        3,
+		StartTime:    now.Add(-100 * time.Second),
+		Delta:        time.Second,
+	})
+
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
+
+	// POST with cluster filter.
+	resp := callResourcesPOST(t, handler, "deployments", map[string]any{
+		"cluster": "cluster-a",
+	})
+	items := extractItems(t, resp)
+	if len(items) != 5 {
+		t.Fatalf("POST cluster filter: expected 5 items, got %d", len(items))
+	}
+
+	// POST with namespace filter.
+	resp = callResourcesPOST(t, handler, "deployments", map[string]any{
+		"namespace": "staging",
+	})
+	items = extractItems(t, resp)
+	if len(items) != 3 {
+		t.Fatalf("POST namespace filter: expected 3 items, got %d", len(items))
+	}
+
+	// POST with raw=true.
+	resp = callResourcesPOST(t, handler, "deployments", map[string]any{
+		"cluster": "cluster-a",
+		"raw":     true,
+		"limit":   2,
+	})
+	items = extractItems(t, resp)
+	if len(items) != 2 {
+		t.Fatalf("POST raw+limit: expected 2 items, got %d", len(items))
+	}
+	first := items[0].(map[string]any)
+	if _, ok := first["raw"]; !ok {
+		t.Fatal("expected raw field in POST response with raw=true")
+	}
+}
+
+func TestResourcesPOST_Pagination(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedResources(t, db, seedOptions{
+		Cluster:      "cluster-a",
+		Namespace:    "prod",
+		ResourceKind: "apps/v1:Deployment",
+		Count:        5,
+		StartTime:    now,
+		Delta:        time.Second,
+	})
+
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
+
+	// Page 1.
+	resp := callResourcesPOST(t, handler, "deployments", map[string]any{
+		"cluster": "cluster-a",
+		"limit":   2,
+	})
+	items := extractItems(t, resp)
+	if len(items) != 2 {
+		t.Fatalf("POST page 1: expected 2 items, got %d", len(items))
+	}
+	cursor, _ := resp["cursor"].(string)
+	if cursor == "" {
+		t.Fatal("expected cursor for page 1")
+	}
+
+	// Page 2 with cursor.
+	resp = callResourcesPOST(t, handler, "deployments", map[string]any{
+		"cluster": "cluster-a",
+		"limit":   2,
+		"cursor":  cursor,
+	})
+	items = extractItems(t, resp)
+	if len(items) != 2 {
+		t.Fatalf("POST page 2: expected 2 items, got %d", len(items))
+	}
+}
+
+func TestResourcesPOST_ValidationErrors(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
+
+	tests := []struct {
+		name       string
+		kind       string
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "empty body returns 400",
+			kind:       "deployments",
+			body:       "",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "unknown field returns 400",
+			kind:       "deployments",
+			body:       `{"cluster":"a","unknownField":"x"}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "invalid JSON returns 400",
+			kind:       "deployments",
+			body:       `{not valid json}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "multiple JSON values returns 400",
+			kind:       "deployments",
+			body:       `{"cluster":"a"}{"cluster":"b"}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "invalid composition_id returns 400",
+			kind:       "deployments",
+			body:       `{"composition_id":"not-a-uuid"}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "unknown kind returns 404",
+			kind:       "unknown",
+			body:       `{"cluster":"a"}`,
+			wantStatus: http.StatusNotFound,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var body *bytes.Reader
+			if tt.body == "" {
+				body = bytes.NewReader(nil)
+			} else {
+				body = bytes.NewReader([]byte(tt.body))
+			}
+			req := httptest.NewRequest("POST", "/resources/"+tt.kind, body)
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("expected status %d, got %d: %s", tt.wantStatus, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// --- Unit test: method not allowed ---
+
+func TestResourcesMethodNotAllowed(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	handler := ResourcesHandler(db, testLogger(), testRegistry(t))
+
+	for _, method := range []string{"PUT", "DELETE", "PATCH"} {
+		req := httptest.NewRequest(method, "/resources/deployments", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s: expected 405, got %d", method, rec.Code)
+		}
+	}
+}
+
 // --- Unit test: parseRequest (no Docker needed) ---
 
 func TestParseRequest(t *testing.T) {
@@ -369,7 +710,7 @@ func TestParseRequest(t *testing.T) {
 		},
 		{
 			name:     "query params parsed correctly",
-			url:      "/resources/deployments?cluster=c1&namespace=ns1&raw=true&limit=42",
+			url:      "/resources/deployments?cluster=c1&namespace=ns1&raw=true&limit=42&name=api",
 			wantKind: "apps/v1:Deployment",
 		},
 		{
@@ -385,6 +726,26 @@ func TestParseRequest(t *testing.T) {
 		{
 			name:     "valid composition_id accepted",
 			url:      "/resources/deployments?composition_id=550e8400-e29b-41d4-a716-446655440000",
+			wantKind: "apps/v1:Deployment",
+		},
+		{
+			name:       "invalid labels JSON returns 400",
+			url:        "/resources/deployments?labels=not-json",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:     "valid labels JSON accepted",
+			url:      `/resources/deployments?labels={"app":"nginx"}`,
+			wantKind: "apps/v1:Deployment",
+		},
+		{
+			name:       "invalid since returns 400",
+			url:        "/resources/deployments?since=not-a-timestamp",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:     "valid since accepted",
+			url:      "/resources/deployments?since=2026-03-01T00:00:00Z",
 			wantKind: "apps/v1:Deployment",
 		},
 	}
@@ -425,8 +786,105 @@ func TestParseRequest(t *testing.T) {
 				if params.Limit != 42 {
 					t.Fatalf("expected Limit=42, got %d", params.Limit)
 				}
+				if params.Name != "api" {
+					t.Fatalf("expected Name=api, got %q", params.Name)
+				}
 			}
 		})
+	}
+}
+
+// --- Unit test: parseListParamsJSON (no Docker needed) ---
+// Analogous to events-presenter's TestResourcesQueryJSONFromHTTPRequest_OK.
+
+func TestParseListParamsJSON_OK(t *testing.T) {
+	body := `{
+		"cluster":"cluster-a",
+		"namespace":"prod",
+		"composition_id":"550e8400-e29b-41d4-a716-446655440000",
+		"name":"api",
+		"labels":{"app":"payments","tier":"backend"},
+		"since":"2026-03-01T00:00:00Z",
+		"raw":true,
+		"limit":42,
+		"cursor":"abc"
+	}`
+
+	req := httptest.NewRequest("POST", "/resources/deployments", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	got, err := parseListParamsJSON(req, "apps/v1:Deployment")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got.ResourceKind != "apps/v1:Deployment" {
+		t.Fatalf("unexpected ResourceKind: %q", got.ResourceKind)
+	}
+	if got.Cluster != "cluster-a" {
+		t.Fatalf("unexpected Cluster: %q", got.Cluster)
+	}
+	if got.Namespace != "prod" {
+		t.Fatalf("unexpected Namespace: %q", got.Namespace)
+	}
+	if got.CompositionID != "550e8400-e29b-41d4-a716-446655440000" {
+		t.Fatalf("unexpected CompositionID: %q", got.CompositionID)
+	}
+	if got.Name != "api" {
+		t.Fatalf("unexpected Name: %q", got.Name)
+	}
+	if got.Labels == "" {
+		t.Fatal("labels should not be empty")
+	}
+	if got.Since == nil || got.Since.Format(time.RFC3339) != "2026-03-01T00:00:00Z" {
+		t.Fatalf("unexpected Since: %v", got.Since)
+	}
+	if !got.Raw {
+		t.Fatal("expected Raw=true")
+	}
+	if got.Limit != 42 {
+		t.Fatalf("unexpected Limit: %d", got.Limit)
+	}
+	if string(got.Cursor) != "abc" {
+		t.Fatalf("unexpected Cursor: %q", got.Cursor)
+	}
+}
+
+// Analogous to events-presenter's TestResourcesQueryJSONFromHTTPRequest_DefaultLimit.
+func TestParseListParamsJSON_DefaultLimit(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources/deployments", strings.NewReader(`{"limit":0}`))
+	got, err := parseListParamsJSON(req, "apps/v1:Deployment")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Limit != defaultLimit {
+		t.Fatalf("expected default limit %d, got %d", defaultLimit, got.Limit)
+	}
+}
+
+// Analogous to events-presenter's TestResourcesQueryJSONFromHTTPRequest_UnknownField.
+func TestParseListParamsJSON_UnknownField(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources/deployments", strings.NewReader(`{"bad":"x"}`))
+	_, err := parseListParamsJSON(req, "apps/v1:Deployment")
+	if err == nil {
+		t.Fatal("expected error for unknown field")
+	}
+}
+
+// Analogous to events-presenter's TestResourcesQueryJSONFromHTTPRequest_EmptyBody.
+func TestParseListParamsJSON_EmptyBody(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources/deployments", strings.NewReader(""))
+	_, err := parseListParamsJSON(req, "apps/v1:Deployment")
+	if err == nil {
+		t.Fatal("expected error for empty body")
+	}
+}
+
+func TestParseListParamsJSON_MultipleValues(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources/deployments", strings.NewReader(`{"cluster":"a"}{"cluster":"b"}`))
+	_, err := parseListParamsJSON(req, "apps/v1:Deployment")
+	if err == nil {
+		t.Fatal("expected error for multiple JSON values")
 	}
 }
 
@@ -504,6 +962,14 @@ ON krateo_resources (resource_kind, updated_at DESC, id DESC);
 
 CREATE INDEX IF NOT EXISTS idx_krateo_resources_obj
 ON krateo_resources (cluster_name, namespace, resource_kind, resource_name);
+
+CREATE INDEX IF NOT EXISTS idx_krateo_resources_metadata
+ON krateo_resources
+USING GIN ((raw->'metadata'));
+
+CREATE INDEX IF NOT EXISTS idx_krateo_resources_raw
+ON krateo_resources
+USING GIN (raw jsonb_path_ops);
 `
 	_, err := db.Exec(context.Background(), schema)
 	if err != nil {
@@ -640,4 +1106,100 @@ func extractItems(t *testing.T, resp map[string]any) []any {
 	}
 
 	return items
+}
+
+// callResourcesPOST sends a POST request with a JSON body.
+func callResourcesPOST(
+	t *testing.T,
+	handler http.Handler,
+	resourceKind string,
+	body map[string]any,
+) map[string]any {
+	t.Helper()
+
+	bodyJSON, _ := json.Marshal(body)
+	req := httptest.NewRequest("POST", "/resources/"+resourceKind, bytes.NewReader(bodyJSON))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	return resp
+}
+
+// seedResource describes a single resource with a name and labels.
+type seedResource struct {
+	Name   string
+	Labels map[string]string
+}
+
+// seedLabelsOptions is used by seedResourcesWithLabels.
+type seedLabelsOptions struct {
+	Cluster      string
+	Namespace    string
+	ResourceKind string
+	StartTime    time.Time
+	Delta        time.Duration
+	Resources    []seedResource
+}
+
+// seedResourcesWithLabels seeds resources with specific names and labels in the raw JSONB.
+func seedResourcesWithLabels(t *testing.T, db *pgxpool.Pool, opt seedLabelsOptions) {
+	t.Helper()
+
+	for i, res := range opt.Resources {
+		uid := fmt.Sprintf("uid-lbl-%04d", i)
+		updatedAt := opt.StartTime.Add(-time.Duration(i) * opt.Delta)
+
+		// Convert string labels to any for JSON.
+		labels := make(map[string]any, len(res.Labels))
+		for k, v := range res.Labels {
+			labels[k] = v
+		}
+
+		raw := map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"metadata": map[string]any{
+				"name":      res.Name,
+				"namespace": opt.Namespace,
+				"labels":    labels,
+			},
+		}
+		rawJSON, _ := json.Marshal(raw)
+
+		_, err := db.Exec(context.Background(), `
+INSERT INTO krateo_resources (
+	updated_at,
+	cluster_name,
+	uid,
+	global_uid,
+	namespace,
+	resource_kind,
+	resource_name,
+	raw
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+`,
+			updatedAt,
+			opt.Cluster,
+			uid,
+			opt.Cluster+":"+uid,
+			opt.Namespace,
+			opt.ResourceKind,
+			res.Name,
+			rawJSON,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 }
