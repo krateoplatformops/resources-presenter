@@ -57,7 +57,7 @@ BEGIN
         VALUES
           (now() - (i || ' minutes')::INTERVAL,
            c, uid_val, c || ':' || uid_val, ns,
-           'widgets.templates.krateo.io/v1beta1:Panel', name_val, raw_val);
+           'widgets.templates.krateo.io/v1beta1.Panel', name_val, raw_val);
 
           i := i + 1;
         END LOOP;

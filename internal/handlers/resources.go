@@ -9,13 +9,11 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/krateoplatformops/plumbing/http/response"
 	"github.com/krateoplatformops/resources-presenter/internal/access"
-	"github.com/krateoplatformops/resources-presenter/internal/registry"
 	"github.com/krateoplatformops/resources-presenter/internal/sql"
 )
 
@@ -28,17 +26,16 @@ const (
 // uuidRegex validates UUID format (RFC 4122).
 var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// ResourcesHandler returns an HTTP handler for GET/POST /resources/{resource_kind}.
-// resource_kind can be a short name (e.g. "panels") or the full apiVersion:Kind
-// format (e.g. "widgets.templates.krateo.io/v1beta1:Panel"). Resolution is done
-// via the embedded resource registry; unknown kinds return 404.
+// ResourcesHandler returns an HTTP handler for GET/POST /resources.
+// The resource kind is identified by query parameters: group, version, kind.
+// These are combined into the DB format: group/version.Kind
 //
 // GET uses query parameters; POST uses a JSON body with the same fields.
 //
 // Design decision: an empty result set returns 200 with an empty items array,
 // not 404. This is consistent with Kubernetes LIST semantics — the resource kind
 // is valid, there are just no instances matching the filters.
-func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, reg *registry.Registry) http.HandlerFunc {
+func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		totalStart := time.Now()
 
@@ -94,9 +91,11 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, reg *registry.Registry
 		// --- Phase 1: Request parsing / validation ---
 		parseStart := time.Now()
 
-		params, policy, parseErr := parseRequest(r, reg)
+		params, policy, parseErr := parseRequest(r)
 		parseDuration = time.Since(parseStart)
-		resourceKind = strings.TrimPrefix(r.URL.Path, "/resources/")
+		if params.ResourceKind != "" {
+			resourceKind = params.ResourceKind
+		}
 
 		if parseErr != nil {
 			statusCode = parseErr.status
@@ -149,26 +148,16 @@ type handlerError struct {
 	msg    string
 }
 
-// parseRequest validates the URL, resolves the resource kind, and extracts params
-// from query string (GET) or JSON body (POST).
+// buildResourceKind constructs the DB resource_kind from group, version, and kind.
+// Format: "group/version.Kind" (e.g. "widgets.templates.krateo.io/v1beta1.Panel").
+func buildResourceKind(group, version, kind string) string {
+	return group + "/" + version + "." + kind
+}
+
+// parseRequest validates the request and extracts params from query string (GET) or JSON body (POST).
+// The resource kind is identified by required query/body params: group, version, kind.
 // Returns (params, policy, nil) on success, or (zero, nil, *handlerError) on failure.
-func parseRequest(r *http.Request, reg *registry.Registry) (sql.ListParams, *access.Policy, *handlerError) {
-	resourceKind := strings.TrimPrefix(r.URL.Path, "/resources/")
-	if resourceKind == "" {
-		return sql.ListParams{}, nil, &handlerError{
-			status: http.StatusBadRequest,
-			msg:    "resource_kind is required in the URL path",
-		}
-	}
-
-	def, ok := reg.Resolve(resourceKind)
-	if !ok {
-		return sql.ListParams{}, nil, &handlerError{
-			status: http.StatusNotFound,
-			msg:    fmt.Sprintf("unknown resource kind %q; available: %v", resourceKind, reg.ShortNames()),
-		}
-	}
-
+func parseRequest(r *http.Request) (sql.ListParams, *access.Policy, *handlerError) {
 	var (
 		params sql.ListParams
 		err    error
@@ -176,9 +165,9 @@ func parseRequest(r *http.Request, reg *registry.Registry) (sql.ListParams, *acc
 
 	switch r.Method {
 	case http.MethodPost:
-		params, err = parseListParamsJSON(r, def.DBKind)
+		params, err = parseListParamsJSON(r)
 	default:
-		params, err = parseListParams(r, def.DBKind)
+		params, err = parseListParams(r)
 	}
 
 	if err != nil {
@@ -194,8 +183,18 @@ func parseRequest(r *http.Request, reg *registry.Registry) (sql.ListParams, *acc
 	return params, policy, nil
 }
 
-func parseListParams(r *http.Request, resourceKind string) (sql.ListParams, error) {
+func parseListParams(r *http.Request) (sql.ListParams, error) {
 	q := r.URL.Query()
+
+	// group, version, kind are required to identify the resource type.
+	group := q.Get("group")
+	version := q.Get("version")
+	kind := q.Get("kind")
+	if group == "" || version == "" || kind == "" {
+		return sql.ListParams{}, fmt.Errorf("query parameters 'group', 'version', and 'kind' are all required")
+	}
+
+	resourceKind := buildResourceKind(group, version, kind)
 
 	limit, err := parseLimit(q.Get("limit"))
 	if err != nil {
@@ -226,6 +225,11 @@ func parseListParams(r *http.Request, resourceKind string) (sql.ListParams, erro
 		since = &t
 	}
 
+	cursor := sql.EncodedCursor(q.Get("cursor"))
+	if err := sql.ValidateCursor(cursor); err != nil {
+		return sql.ListParams{}, fmt.Errorf("invalid cursor: %w", err)
+	}
+
 	p := sql.ListParams{
 		ResourceKind:  resourceKind,
 		Cluster:       q.Get("cluster"),
@@ -236,14 +240,17 @@ func parseListParams(r *http.Request, resourceKind string) (sql.ListParams, erro
 		Since:         since,
 		Raw:           q.Get("raw") == "true",
 		Limit:         limit,
-		Cursor:        sql.EncodedCursor(q.Get("cursor")),
+		Cursor:        cursor,
 	}
 
 	return p, nil
 }
 
-// resourcesJSONPayload is the JSON body for POST /resources/{resource_kind}.
+// resourcesJSONPayload is the JSON body for POST /resources.
 type resourcesJSONPayload struct {
+	Group         string         `json:"group"`
+	Version       string         `json:"version"`
+	Kind          string         `json:"kind"`
 	Cluster       string         `json:"cluster"`
 	Namespace     string         `json:"namespace"`
 	CompositionID string         `json:"composition_id"`
@@ -255,7 +262,7 @@ type resourcesJSONPayload struct {
 	Cursor        string         `json:"cursor"`
 }
 
-func parseListParamsJSON(r *http.Request, resourceKind string) (sql.ListParams, error) {
+func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 	defer r.Body.Close()
 
 	var payload resourcesJSONPayload
@@ -274,6 +281,13 @@ func parseListParamsJSON(r *http.Request, resourceKind string) (sql.ListParams, 
 	if err := dec.Decode(&extra); err != io.EOF {
 		return sql.ListParams{}, fmt.Errorf("invalid JSON body: multiple JSON values")
 	}
+
+	// group, version, kind are required.
+	if payload.Group == "" || payload.Version == "" || payload.Kind == "" {
+		return sql.ListParams{}, fmt.Errorf("fields 'group', 'version', and 'kind' are all required")
+	}
+
+	resourceKind := buildResourceKind(payload.Group, payload.Version, payload.Kind)
 
 	limit := defaultLimit
 	if payload.Limit != nil {
@@ -304,6 +318,11 @@ func parseListParamsJSON(r *http.Request, resourceKind string) (sql.ListParams, 
 		raw = *payload.Raw
 	}
 
+	cursor := sql.EncodedCursor(payload.Cursor)
+	if err := sql.ValidateCursor(cursor); err != nil {
+		return sql.ListParams{}, fmt.Errorf("invalid cursor: %w", err)
+	}
+
 	p := sql.ListParams{
 		ResourceKind:  resourceKind,
 		Cluster:       payload.Cluster,
@@ -314,7 +333,7 @@ func parseListParamsJSON(r *http.Request, resourceKind string) (sql.ListParams, 
 		Since:         payload.Since,
 		Raw:           raw,
 		Limit:         limit,
-		Cursor:        sql.EncodedCursor(payload.Cursor),
+		Cursor:        cursor,
 	}
 
 	return p, nil

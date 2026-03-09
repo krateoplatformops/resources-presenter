@@ -1,4 +1,0 @@
-resources:
-  - shortName: panels
-    apiVersion: widgets.templates.krateo.io/v1beta1
-    kind: Panel

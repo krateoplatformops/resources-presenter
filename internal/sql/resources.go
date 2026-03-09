@@ -219,10 +219,12 @@ func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) 
 	return query, args, nil
 }
 
-// splitResourceKind splits "apiVersion:Kind" into its two parts.
-// For example, "apps/v1:Deployment" -> ("apps/v1", "Deployment").
+// splitResourceKind splits "apiVersion.Kind" into its two parts.
+// The DB stores resource_kind as e.g. "composition.krateo.io/v1-2-2.GithubScaffoldingWithCompositionPage".
+// We use the last dot as the separator because the apiVersion portion can also contain dots.
+// For example, "apps/v1.Deployment" -> ("apps/v1", "Deployment").
 func splitResourceKind(rk string) (apiVersion, kind string) {
-	idx := strings.LastIndex(rk, ":")
+	idx := strings.LastIndex(rk, ".")
 	if idx < 0 {
 		return "", rk
 	}

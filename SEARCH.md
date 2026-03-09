@@ -1,13 +1,13 @@
-# `/resources/{resource_kind}` Search Guide
+# `/resources` Search Guide
 
-This document explains how to query `/resources/{resource_kind}` in resources-presenter.
+This document explains how to query `/resources` in resources-presenter.
 
 Supported methods:
 
-- `GET /resources/{resource_kind}` with query parameters
-- `POST /resources/{resource_kind}` with a JSON body
+- `GET /resources` with query parameters
+- `POST /resources` with a JSON body
 
-## What `/resources/{resource_kind}` Returns
+## What `/resources` Returns
 
 Each item in the response represents the current state of a Kubernetes resource (one row per `global_uid`).
 
@@ -16,18 +16,27 @@ Use `raw=true` to also include the full Kubernetes object under the `raw` field.
 
 ## Resource Kind Resolution
 
-`resource_kind` can be:
-- A **short name** (e.g. `panels`) — resolved via the embedded resource registry
-- The **full format** (e.g. `widgets.templates.krateo.io/v1beta1:Panel`) — used directly
+The resource kind is identified by three **required** parameters:
 
-Unknown kinds return `404`.
+| Parameter | Example | Description |
+| --- | --- | --- |
+| `group` | `apps`, `widgets.templates.krateo.io` | Kubernetes API group |
+| `version` | `v1`, `v1beta1` | API version |
+| `kind` | `Deployment`, `Panel` | Resource kind (case-sensitive, PascalCase) |
+
+These are combined into the DB format `group/version.Kind` (e.g. `widgets.templates.krateo.io/v1beta1.Panel`).
+
+Missing any of the three returns `400`.
 
 ## Query Parameters
 
-All filters are optional and are combined with `AND`.
+All filters (except `group`, `version`, `kind`) are optional and are combined with `AND`.
 
 | Parameter | Type | Behavior |
 | --- | --- | --- |
+| `group` | string | **Required.** API group. |
+| `version` | string | **Required.** API version. |
+| `kind` | string | **Required.** Resource kind (case-sensitive). |
 | `cluster` | string | Exact match on `cluster_name`. |
 | `namespace` | string | Exact match on `namespace`. |
 | `composition_id` | UUID | Exact match on `composition_id`. Must be a valid RFC 4122 UUID. |
@@ -43,12 +52,15 @@ If `cursor` is invalid base64/JSON, the API returns `400`.
 
 ## POST JSON Body
 
-For `POST /resources/{resource_kind}`, use the same fields in JSON format.
+For `POST /resources`, use the same fields in JSON format.
 
 Example body:
 
 ```json
 {
+  "group": "apps",
+  "version": "v1",
+  "kind": "Deployment",
   "cluster": "cluster-a",
   "namespace": "prod",
   "composition_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -65,6 +77,7 @@ Example body:
 
 Notes:
 
+- `group`, `version`, and `kind` are **required** in the JSON body too.
 - Unknown JSON fields return `400`.
 - Empty body returns `400`.
 - `limit` defaults to `100` when omitted or `<= 0`.
@@ -75,13 +88,19 @@ Notes:
 ### 1) GET: no filters (first page)
 
 ```bash
-curl "http://localhost:8080/resources/panels"
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=widgets.templates.krateo.io" \
+  --data-urlencode "version=v1beta1" \
+  --data-urlencode "kind=Panel"
 ```
 
 ### 2) GET: filter by cluster + namespace
 
 ```bash
-curl --get "http://localhost:8080/resources/deployments" \
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "kind=Deployment" \
   --data-urlencode "cluster=cluster-a" \
   --data-urlencode "namespace=default"
 ```
@@ -89,7 +108,10 @@ curl --get "http://localhost:8080/resources/deployments" \
 ### 3) GET: search by resource name (contains, case-insensitive)
 
 ```bash
-curl --get "http://localhost:8080/resources/deployments" \
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "kind=Deployment" \
   --data-urlencode "name=api"
 ```
 
@@ -98,7 +120,10 @@ Matches names like `api`, `API`, `my-api-service`, `api-gateway`.
 ### 4) GET: filter by labels
 
 ```bash
-curl --get "http://localhost:8080/resources/deployments" \
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "kind=Deployment" \
   --data-urlencode 'labels={"app":"nginx","tier":"backend"}'
 ```
 
@@ -107,7 +132,10 @@ curl --get "http://localhost:8080/resources/deployments" \
 ### 5) GET: filter by time (`since`)
 
 ```bash
-curl --get "http://localhost:8080/resources/deployments" \
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "kind=Deployment" \
   --data-urlencode "since=2026-03-01T00:00:00Z"
 ```
 
@@ -116,21 +144,30 @@ Returns resources with `updated_at >= since`.
 ### 6) GET: filter by composition_id
 
 ```bash
-curl --get "http://localhost:8080/resources/panels" \
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=widgets.templates.krateo.io" \
+  --data-urlencode "version=v1beta1" \
+  --data-urlencode "kind=Panel" \
   --data-urlencode "composition_id=550e8400-e29b-41d4-a716-446655440000"
 ```
 
 ### 7) GET: include full raw object
 
 ```bash
-curl --get "http://localhost:8080/resources/panels" \
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=widgets.templates.krateo.io" \
+  --data-urlencode "version=v1beta1" \
+  --data-urlencode "kind=Panel" \
   --data-urlencode "raw=true"
 ```
 
 ### 8) GET: combine all filters
 
 ```bash
-curl --get "http://localhost:8080/resources/deployments" \
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "kind=Deployment" \
   --data-urlencode "cluster=cluster-a" \
   --data-urlencode "namespace=prod" \
   --data-urlencode "name=api" \
@@ -143,9 +180,12 @@ curl --get "http://localhost:8080/resources/deployments" \
 ### 9) POST: same query as JSON body
 
 ```bash
-curl --request POST "http://localhost:8080/resources/deployments" \
+curl --request POST "http://localhost:8080/resources" \
   --header "Content-Type: application/json" \
   --data '{
+    "group": "apps",
+    "version": "v1",
+    "kind": "Deployment",
     "cluster": "cluster-a",
     "namespace": "prod",
     "name": "api",
@@ -172,12 +212,18 @@ When there are no more pages, the `cursor` field is absent in the response.
 
 ```bash
 # page 1
-curl --get "http://localhost:8080/resources/deployments" \
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "kind=Deployment" \
   --data-urlencode "cluster=cluster-a" \
   --data-urlencode "limit=100"
 
 # page 2 (use cursor from page 1 response)
-curl --get "http://localhost:8080/resources/deployments" \
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "kind=Deployment" \
   --data-urlencode "cluster=cluster-a" \
   --data-urlencode "limit=100" \
   --data-urlencode "cursor=<CURSOR_PAGE_1>"
@@ -187,17 +233,23 @@ curl --get "http://localhost:8080/resources/deployments" \
 
 ```bash
 # page 1
-curl --request POST "http://localhost:8080/resources/deployments" \
+curl --request POST "http://localhost:8080/resources" \
   --header "Content-Type: application/json" \
   --data '{
+    "group": "apps",
+    "version": "v1",
+    "kind": "Deployment",
     "cluster": "cluster-a",
     "limit": 100
   }'
 
 # page 2 (use cursor from page 1 response)
-curl --request POST "http://localhost:8080/resources/deployments" \
+curl --request POST "http://localhost:8080/resources" \
   --header "Content-Type: application/json" \
   --data '{
+    "group": "apps",
+    "version": "v1",
+    "kind": "Deployment",
     "cluster": "cluster-a",
     "limit": 100,
     "cursor": "<CURSOR_PAGE_1>"
@@ -207,17 +259,23 @@ curl --request POST "http://localhost:8080/resources/deployments" \
 ### Automatic pagination loop (Bash + jq)
 
 ```bash
-BASE_URL="http://localhost:8080/resources/deployments"
+BASE_URL="http://localhost:8080/resources"
 CURSOR=""
 
 while true; do
   if [ -n "$CURSOR" ]; then
     RESP=$(curl --silent --get "$BASE_URL" \
+      --data-urlencode "group=apps" \
+      --data-urlencode "version=v1" \
+      --data-urlencode "kind=Deployment" \
       --data-urlencode "cluster=cluster-a" \
       --data-urlencode "limit=100" \
       --data-urlencode "cursor=$CURSOR")
   else
     RESP=$(curl --silent --get "$BASE_URL" \
+      --data-urlencode "group=apps" \
+      --data-urlencode "version=v1" \
+      --data-urlencode "kind=Deployment" \
       --data-urlencode "cluster=cluster-a" \
       --data-urlencode "limit=100")
   fi
@@ -287,7 +345,6 @@ Errors are returned as Kubernetes-style `Status` objects:
 
 | Status Code | Condition |
 | --- | --- |
-| `400` | Invalid parameters (bad UUID, JSON, timestamp, limit, cursor) |
-| `404` | Unknown resource kind |
+| `400` | Invalid or missing parameters (missing group/version/kind, bad UUID, JSON, timestamp, limit, cursor) |
 | `405` | Method not allowed (only GET and POST are supported) |
 | `500` | Internal server error (database failure, serialization error) |

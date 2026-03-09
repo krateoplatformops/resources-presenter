@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS krateo_resources (
     global_uid        TEXT NOT NULL, -- cluster_name:uid
 
     namespace         TEXT NOT NULL,
-    resource_kind     TEXT NOT NULL, -- include apiVersion, e.g. apps/v1:Deployment
+    resource_kind     TEXT NOT NULL, -- group/version.Kind, e.g. apps/v1.Deployment
     resource_name     TEXT NOT NULL,
 
     -- Optional domain identifier

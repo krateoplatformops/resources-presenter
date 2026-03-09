@@ -15,17 +15,14 @@
 All tests require Docker to be running (testcontainers starts a Postgres container automatically).
 
 ```bash
-# Run all tests
-go test ./... -cover
-
 # Unit tests only (SQL layer, fast, uses pgxmock)
 go test ./internal/sql/ -cover -v
 
 # Integration tests only (handler layer, uses testcontainers)
 go test ./internal/handlers/ -cover -v
 
-# Registry tests (no Docker needed)
-go test ./internal/registry/ -cover -v
+# Run all tests
+go test ./... -cover
 ```
 
 ## Local manual testing (curl)
@@ -76,34 +73,38 @@ DB_USER=krateo DB_PASS=krateo DB_HOST=localhost DB_NAME=krateo \
 #### GET examples
 
 ```bash
-# List panels (short name)
-curl -s http://localhost:8080/resources/panels | jq
+# List panels
+curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel' | jq
 
 # List panels with full raw objects
-curl -s 'http://localhost:8080/resources/panels?raw=true' | jq
+curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&raw=true' | jq
 
 # Filter by namespace
-curl -s 'http://localhost:8080/resources/panels?namespace=krateo-system' | jq
+curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&namespace=krateo-system' | jq
 
 # Filter by cluster + namespace
-curl -s 'http://localhost:8080/resources/panels?cluster=prod-eu&namespace=krateo-system' | jq
+curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&cluster=prod-eu&namespace=krateo-system' | jq
 
 # Search by name (case-insensitive, partial match)
-curl -s 'http://localhost:8080/resources/panels?name=blueprints' | jq
+curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&name=blueprints' | jq
 
 # Filter by labels
-curl -s 'http://localhost:8080/resources/panels?labels=%7B%22app.kubernetes.io%2Fpart-of%22%3A%22dashboard%22%7D' | jq
+curl --get 'http://localhost:8080/resources' \
+  --data-urlencode 'group=widgets.templates.krateo.io' \
+  --data-urlencode 'version=v1beta1' \
+  --data-urlencode 'kind=Panel' \
+  --data-urlencode 'labels={"app.kubernetes.io/part-of":"dashboard"}' | jq
 
 # Filter by time (resources updated after a given date)
-curl -s 'http://localhost:8080/resources/panels?since=2026-03-01T00:00:00Z' | jq
+curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&since=2026-03-01T00:00:00Z' | jq
 
 # Pagination (page 1, then page 2)
-curl -s 'http://localhost:8080/resources/panels?limit=10' | jq
+curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&limit=10' | jq
 # copy cursor from response, then:
-curl -s 'http://localhost:8080/resources/panels?limit=10&cursor=<CURSOR>' | jq
+curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&limit=10&cursor=<CURSOR>' | jq
 
-# Unknown resource kind (returns 404)
-curl -s http://localhost:8080/resources/unknown
+# Missing required params (returns 400)
+curl -s 'http://localhost:8080/resources' | jq
 
 # Health probes
 curl -s http://localhost:8080/livez
@@ -114,14 +115,22 @@ curl -s http://localhost:8080/readyz
 
 ```bash
 # Basic query with filters
-curl -s -X POST http://localhost:8080/resources/panels \
-  -H 'Content-Type: application/json' \
-  -d '{"namespace": "krateo-system"}' | jq
-
-# Multiple filters + raw
-curl -s -X POST http://localhost:8080/resources/panels \
+curl -s -X POST http://localhost:8080/resources \
   -H 'Content-Type: application/json' \
   -d '{
+    "group": "widgets.templates.krateo.io",
+    "version": "v1beta1",
+    "kind": "Panel",
+    "namespace": "krateo-system"
+  }' | jq
+
+# Multiple filters + raw
+curl -s -X POST http://localhost:8080/resources \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "group": "widgets.templates.krateo.io",
+    "version": "v1beta1",
+    "kind": "Panel",
     "cluster": "prod-eu",
     "namespace": "krateo-system",
     "name": "blueprints",
@@ -130,39 +139,57 @@ curl -s -X POST http://localhost:8080/resources/panels \
   }' | jq
 
 # Filter by labels (note: labels is a JSON object, not a string)
-curl -s -X POST http://localhost:8080/resources/panels \
+curl -s -X POST http://localhost:8080/resources \
   -H 'Content-Type: application/json' \
   -d '{
+    "group": "widgets.templates.krateo.io",
+    "version": "v1beta1",
+    "kind": "Panel",
     "labels": {"app.kubernetes.io/part-of": "dashboard"},
     "limit": 50
   }' | jq
 
 # Filter by time
-curl -s -X POST http://localhost:8080/resources/panels \
+curl -s -X POST http://localhost:8080/resources \
   -H 'Content-Type: application/json' \
   -d '{
+    "group": "widgets.templates.krateo.io",
+    "version": "v1beta1",
+    "kind": "Panel",
     "since": "2026-03-01T00:00:00Z",
     "limit": 100
   }' | jq
 
 # Pagination via POST (page 1)
-curl -s -X POST http://localhost:8080/resources/panels \
-  -H 'Content-Type: application/json' \
-  -d '{"cluster": "prod-eu", "limit": 10}' | jq
-
-# Pagination via POST (page 2 — use cursor from page 1)
-curl -s -X POST http://localhost:8080/resources/panels \
+curl -s -X POST http://localhost:8080/resources \
   -H 'Content-Type: application/json' \
   -d '{
+    "group": "widgets.templates.krateo.io",
+    "version": "v1beta1",
+    "kind": "Panel",
+    "cluster": "prod-eu",
+    "limit": 10
+  }' | jq
+
+# Pagination via POST (page 2 — use cursor from page 1)
+curl -s -X POST http://localhost:8080/resources \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "group": "widgets.templates.krateo.io",
+    "version": "v1beta1",
+    "kind": "Panel",
     "cluster": "prod-eu",
     "limit": 10,
     "cursor": "<CURSOR_FROM_PAGE_1>"
   }' | jq
 
 # All filters combined
-curl -s -X POST http://localhost:8080/resources/panels \
+curl -s -X POST http://localhost:8080/resources \
   -H 'Content-Type: application/json' \
   -d '{
+    "group": "widgets.templates.krateo.io",
+    "version": "v1beta1",
+    "kind": "Panel",
     "cluster": "prod-eu",
     "namespace": "krateo-system",
     "name": "blueprints",

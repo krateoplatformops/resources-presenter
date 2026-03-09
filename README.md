@@ -10,7 +10,7 @@ Key features:
 
 - **GET and POST** query support with filter capabilities
 - **Keyset pagination** (`updated_at DESC, id DESC`) for stable, efficient paging
-- **Resource kind registry** resolves short names (e.g. `panels`) to full `apiVersion:Kind` format
+- **Dynamic resource kind resolution** via `group`, `version`, and `kind` query parameters — no static registry needed
 - **JSONB label filtering** via PostgreSQL containment (`@>`)
 - **Access policy hook** for future authentication/authorization integration (TODO)
 - **Structured latency logging** for every request (parse, query, serialize phases)
@@ -45,7 +45,7 @@ DB_USER=krateo DB_PASS=krateo DB_HOST=localhost DB_NAME=krateo \
   go run .
 
 # 5. Query
-curl -s http://localhost:8080/resources/panels | jq
+curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel' | jq
 ```
 
 ## API
@@ -53,11 +53,11 @@ curl -s http://localhost:8080/resources/panels | jq
 ### Endpoint
 
 ```
-GET  /resources/{resource_kind}
-POST /resources/{resource_kind}
+GET  /resources?group=<group>&version=<version>&kind=<kind>
+POST /resources
 ```
 
-`resource_kind` can be a short name (`panels`) or the full format (`widgets.templates.krateo.io/v1beta1:Panel`).
+The resource kind is identified by three **required** parameters: `group`, `version`, and `kind`. These are combined into the DB format `group/version.Kind` (e.g. `widgets.templates.krateo.io/v1beta1.Panel`).
 
 ### Filters
 
@@ -65,6 +65,9 @@ All filters are optional and combined with `AND`.
 
 | Parameter | Type | Behavior |
 | --- | --- | --- |
+| `group` | string | **Required.** API group (e.g. `apps`, `widgets.templates.krateo.io`) |
+| `version` | string | **Required.** API version (e.g. `v1`, `v1beta1`) |
+| `kind` | string | **Required.** Resource kind (e.g. `Deployment`, `Panel`). Case-sensitive. |
 | `cluster` | string | Exact match on `cluster_name` |
 | `namespace` | string | Exact match on `namespace` |
 | `composition_id` | UUID | Exact match on `composition_id` |
@@ -107,8 +110,7 @@ Kubernetes-style `Status` objects:
 
 | Code | Condition |
 | --- | --- |
-| `400` | Invalid parameters (bad UUID, JSON, timestamp, cursor) |
-| `404` | Unknown resource kind |
+| `400` | Invalid/missing parameters (missing group/version/kind, bad UUID, JSON, timestamp, cursor) |
 | `405` | Method not allowed |
 | `500` | Internal server error |
 
@@ -128,32 +130,6 @@ See [SEARCH.md](SEARCH.md) for full examples including pagination loops.
 | `DB_PARAMS` | | Extra connection params (e.g. `sslmode=disable`) |
 | `DB_READY_TIMEOUT` | `4m` | Max wait for PostgreSQL to become ready |
 
-## Project Structure
-
-```
-.
-├── main.go                          # Entrypoint: wiring, server, graceful shutdown
-├── internal/
-│   ├── config/                      # Environment-based configuration
-│   ├── handlers/                    # HTTP handler (GET/POST routing, parsing, response)
-│   │   ├── resources.go
-│   │   └── resources_test.go        # Integration tests (testcontainers + PostgreSQL)
-│   ├── sql/                         # Query builder, pagination, cursor encoding
-│   │   ├── resources.go
-│   │   ├── builder.go               # SQL builder with positional $N params
-│   │   ├── cursor.go                # Keyset cursor encode/decode
-│   │   └── resources_test.go        # Unit tests (pgxmock)
-│   ├── registry/                    # Resource kind short name resolution
-│   │   └── resources.yaml           # Embedded registry data
-│   └── access/                      # Access policy stub (future auth)
-├── assets/
-│   └── resources.schema.sql         # DDL for krateo_resources table
-├── chart/                           # Helm chart for Kubernetes deployment
-├── Dockerfile                       # Multi-stage build (distroless runtime)
-├── SEARCH.md                        # Full API reference with curl examples
-└── TESTING.md                       # Testing guide and local manual testing
-```
-
 ## Testing
 
 ```bash
@@ -165,9 +141,6 @@ go test ./internal/sql/ -cover -v
 
 # Integration tests only (real PostgreSQL via testcontainers)
 go test ./internal/handlers/ -cover -v
-
-# Registry tests (no Docker)
-go test ./internal/registry/ -cover -v
 ```
 
 See [TESTING.md](TESTING.md) for manual testing with curl (including seed data and POST examples).
