@@ -205,3 +205,173 @@ curl -s -X POST http://localhost:8080/resources \
 ```bash
 docker stop krateo-pg && docker rm krateo-pg
 ```
+
+---
+
+## Benchmarks
+
+Benchmarks live in `internal/sql/bench_test.go` and measure the hot paths of the query pipeline.
+
+### What is benchmarked
+
+| Benchmark | What it measures |
+|---|---|
+| `BenchmarkCursorEncode` | Encoding a keyset cursor to base64 |
+| `BenchmarkCursorDecode` | Decoding a base64 cursor back to struct |
+| `BenchmarkCursorRoundtrip` | Full encode + decode cycle |
+| `BenchmarkBuildListQuery_Minimal` | SQL builder with only resource_kind filter |
+| `BenchmarkBuildListQuery_AllFilters` | SQL builder with all 7 filters + cursor active |
+| `BenchmarkSplitResourceKind` | Parsing `apiVersion.Kind` strings |
+| `BenchmarkEscapeLIKE` | Escaping LIKE special characters |
+| `BenchmarkJSONMarshal_10/100/1000` | Serializing result sets of varying sizes |
+| `BenchmarkJSONMarshal_1000_WithRaw` | Serializing 1000 items including raw JSONB |
+| `BenchmarkListResources_10/100/1000rows` | Full query + scan + pagination with pgxmock |
+| `BenchmarkListResources_1000rows_raw` | Same with raw JSONB included |
+
+### Running benchmarks
+
+```bash
+# Quick sanity check (1 iteration, fast)
+./scripts/bench.sh quick
+
+# Full run (6 iterations for statistical reliability, saves to benchmarks/)
+./scripts/bench.sh run
+
+# Full run with custom options
+./scripts/bench.sh run -count 10 -benchtime 2s
+
+# Manual (without script)
+go test ./internal/sql/ -bench=. -benchmem -count=6 -run='^$'
+
+# Run specific benchmark
+go test ./internal/sql/ -bench=BenchmarkListResources -benchmem -count=6 -run='^$'
+```
+
+### Key flags explained
+
+| Flag | Purpose |
+|---|---|
+| `-bench=.` | Regex to match benchmark names (`.` = all) |
+| `-benchmem` | Include memory allocation stats (allocs/op, B/op) |
+| `-count=N` | Run each benchmark N times (use 5+ for reliable stats) |
+| `-run='^$'` | Skip unit tests (only run benchmarks) |
+| `-benchtime=2s` | Run each benchmark for 2 seconds instead of default 1s |
+| `-timeout=10m` | Extend timeout for long benchmark suites |
+
+### Saving and comparing results
+
+The `scripts/bench.sh` script automates the save-and-compare workflow:
+
+```bash
+# 1. Save a baseline (e.g. before making changes in the code)
+./scripts/bench.sh baseline
+
+# 2. Make your code changes...
+
+# 3. Run benchmarks again
+./scripts/bench.sh run
+
+# 4. Compare against baseline
+./scripts/bench.sh compare
+```
+
+The `compare` command uses [benchstat](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat), the official Go benchmark comparison tool. Install it once:
+
+```bash
+go install golang.org/x/perf/cmd/benchstat@latest
+```
+
+`benchstat` shows a table with delta percentages and p-values:
+
+```
+                          │ baseline.txt │          latest.txt           │
+                          │    sec/op    │   sec/op    vs base           │
+ListResources_1000rows-8     1.256m ± 3%   0.987m ± 2%  -21.42% (p=0.002)
+```
+
+A change is statistically significant when `p < 0.05`. Use `-count=6` or higher for reliable p-values. With `-count=1` or `-count=2`, benchstat cannot compute meaningful statistics.
+
+**Manual comparison (without the script):**
+
+```bash
+# Save results to files
+go test ./internal/sql/ -bench=. -benchmem -count=6 -run='^$' > bench_before.txt
+# ... make changes ...
+go test ./internal/sql/ -bench=. -benchmem -count=6 -run='^$' > bench_after.txt
+
+# Compare
+benchstat bench_before.txt bench_after.txt
+```
+
+### Reading benchmark output
+
+```
+BenchmarkListResources_100rows-8    7315    160107 ns/op    55023 B/op    1063 allocs/op
+```
+
+| Column | Meaning |
+|---|---|
+| `-8` | GOMAXPROCS (number of CPUs used) |
+| `7315` | Number of iterations the benchmark ran |
+| `160107 ns/op` | Nanoseconds per operation (~0.16ms) |
+| `55023 B/op` | Bytes allocated per operation |
+| `1063 allocs/op` | Heap allocations per operation |
+
+Lower is better for all three metrics. For this service, focus on:
+- **ns/op** for latency-sensitive paths (query + scan)
+- **B/op** and **allocs/op** for GC pressure under high throughput
+
+### Tips for reliable benchmarks
+
+- Close browsers, Slack, Docker Desktop dashboard — anything CPU-intensive
+- Use `-count=6` or more; single runs are noisy
+- Run on the same machine for before/after comparisons
+- Don't compare results across different machines or Go versions
+- The `benchmarks/` directory is gitignored — results are local only
+
+---
+
+## Stress tests
+
+Stress tests live in `internal/sql/stress_test.go` and verify correctness under extreme or edge-case conditions.
+
+### What is tested
+
+| Test | What it verifies |
+|---|---|
+| `TestListResources_MaxLimit` | Correct behavior at max limit (5000 rows, no next page) |
+| `TestListResources_MaxLimitWithNextPage` | Cursor is correctly set when 5001 rows exist |
+| `TestListResources_RawLargePayload` | Handling of ~50KB raw JSONB objects |
+| `TestListResources_ConcurrentAccess` | 50 goroutines querying simultaneously (race safety) |
+| `TestBuildListQuery_AllFilterCombinations` | All 128 combinations of 6 optional filters x 2 policy states |
+| `TestEscapeLIKE` | LIKE special character escaping (`%`, `_`, `\`) |
+
+### Running stress tests
+
+```bash
+# All stress tests
+go test ./internal/sql/ -run='TestListResources_Max|TestListResources_Raw|TestListResources_Concurrent|TestBuildListQuery_AllFilter|TestEscapeLIKE' -v
+
+# Concurrent test with race detector (recommended)
+go test ./internal/sql/ -run=TestListResources_Concurrent -race -v
+
+# All SQL tests (unit + stress)
+go test ./internal/sql/ -v
+
+# All SQL tests with race detector
+go test ./internal/sql/ -race -v
+```
+
+### Running everything
+
+```bash
+# All tests across all packages (unit + integration + stress)
+# Requires Docker for integration tests
+go test ./... -v
+
+# Just unit + stress tests (no Docker needed)
+go test ./internal/sql/ ./internal/config/ -v
+
+# Full suite with race detection and coverage
+go test ./... -race -cover
+```

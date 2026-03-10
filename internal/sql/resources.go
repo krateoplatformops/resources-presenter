@@ -71,8 +71,9 @@ func ListResources(ctx context.Context, db Querier, p ListParams, policy *access
 	}
 	defer rows.Close()
 
-	var items []ResourceItem
-	var cursors []rowCursor
+	// Pre-allocate to avoid repeated growing for large result sets.
+	items := make([]ResourceItem, 0, p.Limit+1)
+	cursors := make([]rowCursor, 0, p.Limit+1)
 
 	for rows.Next() {
 		var (
@@ -84,7 +85,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams, policy *access
 			updatedAt     time.Time
 			compositionID *string
 			id            int64
-			rawJSON       []byte
+			rawJSON       []byte // TODO: can we switch to json.RawMessage here?
 		)
 
 		scanDest := []any{
@@ -169,7 +170,7 @@ func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) 
 	}
 
 	if p.Name != "" {
-		b.Where("resource_name ILIKE ?", "%"+p.Name+"%")
+		b.Where("resource_name ILIKE ?", "%"+escapeLIKE(p.Name)+"%")
 	}
 
 	if p.Labels != "" {
@@ -217,6 +218,12 @@ func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) 
 	baseSQL := fmt.Sprintf("SELECT %s FROM krateo_resources", cols)
 	query, args := b.Render(baseSQL)
 	return query, args, nil
+}
+
+// escapeLIKE escapes PostgreSQL LIKE/ILIKE special characters (%, _, \).
+func escapeLIKE(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }
 
 // splitResourceKind splits "apiVersion.Kind" into its two parts.

@@ -42,3 +42,6 @@ go.work.sum
 
 PROMPT.md
 PROGRESS.md
+
+# Benchmark output files
+benchmarks/

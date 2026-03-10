@@ -136,7 +136,9 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
 		rowsReturned = len(result.Items)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			log.Debug("client write error", slog.Any("err", err))
+		}
 
 		serDuration = time.Since(serializeStart)
 	}
@@ -177,7 +179,7 @@ func parseRequest(r *http.Request) (sql.ListParams, *access.Policy, *handlerErro
 		}
 	}
 
-	// TODO(auth): populate from verified JWT/session claims.
+	// TODO(auth): filter with JWT/session claims.
 	policy := access.PolicyFromRequest(r)
 
 	return params, policy, nil
