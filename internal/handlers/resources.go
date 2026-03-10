@@ -50,10 +50,10 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
 			queryErr      error
 		)
 
-		// Every request gets logged — successes and errors alike.
+		// Every request gets logged in detail, then there is also the higher-level access log due to the middleware.
 		defer func() {
 			totalDuration := time.Since(totalStart)
-			lvl := slog.LevelInfo
+			lvl := slog.LevelDebug
 			if statusCode >= 500 {
 				lvl = slog.LevelError
 			} else if statusCode >= 400 {

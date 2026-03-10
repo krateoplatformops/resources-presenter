@@ -43,6 +43,7 @@ func main() {
 	probes.Register(mux, cfg.Log, pool, time.Second)
 
 	chain := use.NewChain(
+		use.Access(cfg.Log),
 		use.CORS(cors.Options{
 			AllowedOrigins: []string{"*"},
 			AllowedMethods: []string{"GET", "POST", "OPTIONS"},
