@@ -12,13 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/krateoplatformops/resources-proxy/internal/config"
-	"github.com/krateoplatformops/resources-proxy/internal/handlers"
-	"github.com/krateoplatformops/resources-proxy/internal/registry"
 	"github.com/krateoplatformops/plumbing/pgutil"
 	"github.com/krateoplatformops/plumbing/server/probes"
 	"github.com/krateoplatformops/plumbing/server/use"
 	"github.com/krateoplatformops/plumbing/server/use/cors"
+	"github.com/krateoplatformops/resources-presenter/internal/config"
+	"github.com/krateoplatformops/resources-presenter/internal/handlers"
 )
 
 func main() {
@@ -38,22 +37,15 @@ func main() {
 	defer pool.Close()
 	cfg.Log.Info("PostgreSQL is ready")
 
-	reg, err := registry.Load()
-	if err != nil {
-		cfg.Log.Error("cannot load resource registry", slog.Any("err", err))
-		os.Exit(1)
-	}
-	cfg.Log.Info("resource registry loaded", slog.Int("count", len(reg.ShortNames())))
-
 	// HTTP server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/resources/", handlers.ResourcesHandler(pool, cfg.Log, reg))
+	mux.HandleFunc("/resources", handlers.ResourcesHandler(pool, cfg.Log))
 	probes.Register(mux, cfg.Log, pool, time.Second)
 
 	chain := use.NewChain(
 		use.CORS(cors.Options{
 			AllowedOrigins: []string{"*"},
-			AllowedMethods: []string{"GET", "OPTIONS"},
+			AllowedMethods: []string{"GET", "POST", "OPTIONS"},
 			AllowedHeaders: []string{
 				"Accept",
 				"Authorization",

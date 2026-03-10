@@ -1,7 +1,7 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "resources-proxy.name" -}}
+{{- define "resources-presenter.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
@@ -10,7 +10,7 @@ Create a default fully qualified app name.
 We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
 If release name contains chart name it will be used as a full name.
 */}}
-{{- define "resources-proxy.fullname" -}}
+{{- define "resources-presenter.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -26,16 +26,16 @@ If release name contains chart name it will be used as a full name.
 {{/*
 Create chart name and version as used by the chart label.
 */}}
-{{- define "resources-proxy.chart" -}}
+{{- define "resources-presenter.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Common labels
 */}}
-{{- define "resources-proxy.labels" -}}
-helm.sh/chart: {{ include "resources-proxy.chart" . }}
-{{ include "resources-proxy.selectorLabels" . }}
+{{- define "resources-presenter.labels" -}}
+helm.sh/chart: {{ include "resources-presenter.chart" . }}
+{{ include "resources-presenter.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -46,17 +46,17 @@ app.kubernetes.io/part-of: krateo
 {{/*
 Selector labels
 */}}
-{{- define "resources-proxy.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "resources-proxy.name" . }}
+{{- define "resources-presenter.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "resources-presenter.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
 Create the name of the service account to use
 */}}
-{{- define "resources-proxy.serviceAccountName" -}}
+{{- define "resources-presenter.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "resources-proxy.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "resources-presenter.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}

@@ -39,3 +39,14 @@ func DecodeCursor(s EncodedCursor) (*ResourcesCursor, error) {
 	}
 	return &c, nil
 }
+
+// ValidateCursor checks that the cursor is a valid encoded cursor.
+// Returns nil if the cursor is empty or valid, an error otherwise.
+// Use this at the HTTP boundary to return 400 for bad cursors instead of 500.
+func ValidateCursor(s EncodedCursor) error {
+	if s == "" {
+		return nil
+	}
+	_, err := DecodeCursor(s)
+	return err
+}

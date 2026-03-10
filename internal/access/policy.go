@@ -8,13 +8,17 @@ import "net/http"
 //
 // The repository layer accepts *Policy and skips access filtering when nil.
 type Policy struct {
+	// AllowedClusters restricts results to these clusters.
+	// Empty means no restriction.
+	AllowedClusters []string
+
 	// AllowedNamespaces restricts results to these namespaces.
 	// Empty means no restriction.
 	AllowedNamespaces []string
 
-	// AllowedClusters restricts results to these clusters.
+	// AllowedKinds restricts results to these resource kinds.
 	// Empty means no restriction.
-	AllowedClusters []string
+	AllowedKinds []string
 }
 
 // TODO(auth): populate from verified JWT/session claims.

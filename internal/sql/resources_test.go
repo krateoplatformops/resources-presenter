@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/krateoplatformops/resources-proxy/internal/access"
+	"github.com/krateoplatformops/resources-presenter/internal/access"
 	"github.com/pashagolub/pgxmock/v4"
 )
 
@@ -30,11 +30,11 @@ func TestListResources_NoResults(t *testing.T) {
 	defer mock.Close()
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("widgets.templates.krateo.io/v1beta1:Panel", 51). // limit+1
+		WithArgs("widgets.templates.krateo.io/v1beta1.Panel", 51). // limit+1
 		WillReturnRows(pgxmock.NewRows(baseCols()))
 
 	params := ListParams{
-		ResourceKind: "widgets.templates.krateo.io/v1beta1:Panel",
+		ResourceKind: "widgets.templates.krateo.io/v1beta1.Panel",
 		Limit:        50,
 	}
 
@@ -67,15 +67,15 @@ func TestListResources_SinglePage(t *testing.T) {
 	created := now.Add(-24 * time.Hour)
 
 	rows := pgxmock.NewRows(baseCols()).
-		AddRow("panel-1", "default", "widgets.templates.krateo.io/v1beta1:Panel", "cluster-a", created, now, nil, int64(10)).
-		AddRow("panel-2", "default", "widgets.templates.krateo.io/v1beta1:Panel", "cluster-a", created, now.Add(-time.Minute), nil, int64(9))
+		AddRow("panel-1", "default", "widgets.templates.krateo.io/v1beta1.Panel", "cluster-a", created, now, nil, int64(10)).
+		AddRow("panel-2", "default", "widgets.templates.krateo.io/v1beta1.Panel", "cluster-a", created, now.Add(-time.Minute), nil, int64(9))
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("widgets.templates.krateo.io/v1beta1:Panel", 51).
+		WithArgs("widgets.templates.krateo.io/v1beta1.Panel", 51).
 		WillReturnRows(rows)
 
 	params := ListParams{
-		ResourceKind: "widgets.templates.krateo.io/v1beta1:Panel",
+		ResourceKind: "widgets.templates.krateo.io/v1beta1.Panel",
 		Limit:        50,
 	}
 
@@ -140,16 +140,16 @@ func TestListResources_Paginated(t *testing.T) {
 
 	// Return limit+1 = 3 rows to indicate there's a next page
 	rows := pgxmock.NewRows(baseCols()).
-		AddRow("panel-1", "default", "widgets.templates.krateo.io/v1beta1:Panel", "cluster-a", created, now, nil, int64(30)).
-		AddRow("panel-2", "default", "widgets.templates.krateo.io/v1beta1:Panel", "cluster-a", created, now.Add(-time.Second), nil, int64(20)).
-		AddRow("panel-3", "default", "widgets.templates.krateo.io/v1beta1:Panel", "cluster-a", created, now.Add(-2*time.Second), nil, int64(10))
+		AddRow("panel-1", "default", "widgets.templates.krateo.io/v1beta1.Panel", "cluster-a", created, now, nil, int64(30)).
+		AddRow("panel-2", "default", "widgets.templates.krateo.io/v1beta1.Panel", "cluster-a", created, now.Add(-time.Second), nil, int64(20)).
+		AddRow("panel-3", "default", "widgets.templates.krateo.io/v1beta1.Panel", "cluster-a", created, now.Add(-2*time.Second), nil, int64(10))
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("widgets.templates.krateo.io/v1beta1:Panel", limit+1).
+		WithArgs("widgets.templates.krateo.io/v1beta1.Panel", limit+1).
 		WillReturnRows(rows)
 
 	params := ListParams{
-		ResourceKind: "widgets.templates.krateo.io/v1beta1:Panel",
+		ResourceKind: "widgets.templates.krateo.io/v1beta1.Panel",
 		Limit:        limit,
 	}
 
@@ -201,14 +201,14 @@ func TestListResources_RawTrue(t *testing.T) {
 	rawJSON, _ := json.Marshal(rawObj)
 
 	rows := pgxmock.NewRows(rawCols()).
-		AddRow("nginx", "prod", "apps/v1:Deployment", "cluster-a", created, now, nil, int64(5), rawJSON)
+		AddRow("nginx", "prod", "apps/v1.Deployment", "cluster-a", created, now, nil, int64(5), rawJSON)
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("apps/v1:Deployment", "prod", 51).
+		WithArgs("apps/v1.Deployment", "prod", 51).
 		WillReturnRows(rows)
 
 	params := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Namespace:    "prod",
 		Raw:          true,
 		Limit:        50,
@@ -261,14 +261,14 @@ func TestListResources_WithCursor(t *testing.T) {
 
 	created := cursorTime.Add(-24 * time.Hour)
 	rows := pgxmock.NewRows(baseCols()).
-		AddRow("panel-old", "default", "widgets.templates.krateo.io/v1beta1:Panel", "cluster-a", created, cursorTime.Add(-time.Minute), nil, int64(15))
+		AddRow("panel-old", "default", "widgets.templates.krateo.io/v1beta1.Panel", "cluster-a", created, cursorTime.Add(-time.Minute), nil, int64(15))
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("widgets.templates.krateo.io/v1beta1:Panel", cursorTime, cursorID, 51).
+		WithArgs("widgets.templates.krateo.io/v1beta1.Panel", cursorTime, cursorID, 51).
 		WillReturnRows(rows)
 
 	params := ListParams{
-		ResourceKind: "widgets.templates.krateo.io/v1beta1:Panel",
+		ResourceKind: "widgets.templates.krateo.io/v1beta1.Panel",
 		Limit:        50,
 		Cursor:       cursor,
 	}
@@ -297,10 +297,11 @@ func TestSplitResourceKind(t *testing.T) {
 		apiVersion string
 		kind       string
 	}{
-		{"apps/v1:Deployment", "apps/v1", "Deployment"},
-		{"widgets.templates.krateo.io/v1beta1:Panel", "widgets.templates.krateo.io/v1beta1", "Panel"},
-		{"v1:Pod", "v1", "Pod"},
-		{"NoColon", "", "NoColon"},
+		{"apps/v1.Deployment", "apps/v1", "Deployment"},
+		{"widgets.templates.krateo.io/v1beta1.Panel", "widgets.templates.krateo.io/v1beta1", "Panel"},
+		{"composition.krateo.io/v1-2-2.GithubScaffoldingWithCompositionPage", "composition.krateo.io/v1-2-2", "GithubScaffoldingWithCompositionPage"},
+		{"v1.Pod", "v1", "Pod"},
+		{"NoDot", "", "NoDot"},
 	}
 
 	for _, tt := range tests {
@@ -314,7 +315,7 @@ func TestSplitResourceKind(t *testing.T) {
 
 func TestBuildListQuery_MinimalFilters(t *testing.T) {
 	p := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Limit:        50,
 	}
 
@@ -327,8 +328,8 @@ func TestBuildListQuery_MinimalFilters(t *testing.T) {
 	if len(args) != 2 {
 		t.Fatalf("expected 2 args, got %d: %v", len(args), args)
 	}
-	if args[0] != "apps/v1:Deployment" {
-		t.Errorf("arg[0] = %v, want apps/v1:Deployment", args[0])
+	if args[0] != "apps/v1.Deployment" {
+		t.Errorf("arg[0] = %v, want apps/v1.Deployment", args[0])
 	}
 	if args[1] != 51 {
 		t.Errorf("arg[1] = %v, want 51", args[1])
@@ -345,7 +346,7 @@ func TestBuildListQuery_AllFilters(t *testing.T) {
 	cursor := EncodeCursor(&ResourcesCursor{UpdatedAt: cursorTime, ID: cursorID})
 
 	p := ListParams{
-		ResourceKind:  "apps/v1:Deployment",
+		ResourceKind:  "apps/v1.Deployment",
 		Cluster:       "cluster-a",
 		Namespace:     "prod",
 		CompositionID: "550e8400-e29b-41d4-a716-446655440000",
@@ -429,11 +430,41 @@ func TestCursorDecodeInvalidJSON(t *testing.T) {
 	}
 }
 
+// --- ValidateCursor tests ---
+
+func TestValidateCursor_Empty(t *testing.T) {
+	if err := ValidateCursor(""); err != nil {
+		t.Fatalf("expected nil for empty cursor, got %v", err)
+	}
+}
+
+func TestValidateCursor_Valid(t *testing.T) {
+	cursor := EncodeCursor(&ResourcesCursor{
+		UpdatedAt: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
+		ID:        42,
+	})
+	if err := ValidateCursor(cursor); err != nil {
+		t.Fatalf("expected nil for valid cursor, got %v", err)
+	}
+}
+
+func TestValidateCursor_InvalidBase64(t *testing.T) {
+	if err := ValidateCursor("!!!not-base64!!!"); err == nil {
+		t.Fatal("expected error for invalid base64")
+	}
+}
+
+func TestValidateCursor_InvalidJSON(t *testing.T) {
+	if err := ValidateCursor(EncodedCursor("bm90LWpzb24=")); err == nil {
+		t.Fatal("expected error for invalid JSON inside cursor")
+	}
+}
+
 // --- Access policy query builder tests ---
 
 func TestBuildListQuery_WithPolicy_NamespacesOnly(t *testing.T) {
 	p := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Limit:        50,
 	}
 	policy := &access.Policy{
@@ -460,7 +491,7 @@ func TestBuildListQuery_WithPolicy_NamespacesOnly(t *testing.T) {
 
 func TestBuildListQuery_WithPolicy_ClustersOnly(t *testing.T) {
 	p := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Limit:        50,
 	}
 	policy := &access.Policy{
@@ -487,7 +518,7 @@ func TestBuildListQuery_WithPolicy_ClustersOnly(t *testing.T) {
 
 func TestBuildListQuery_WithPolicy_Both(t *testing.T) {
 	p := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Limit:        50,
 	}
 	policy := &access.Policy{
@@ -520,7 +551,7 @@ func TestBuildListQuery_WithPolicy_Both(t *testing.T) {
 
 func TestBuildListQuery_ClusterFilter(t *testing.T) {
 	p := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Cluster:      "cluster-a",
 		Limit:        50,
 	}
@@ -545,7 +576,7 @@ func TestBuildListQuery_ClusterFilter(t *testing.T) {
 
 func TestBuildListQuery_CompositionIDFilter(t *testing.T) {
 	p := ListParams{
-		ResourceKind:  "apps/v1:Deployment",
+		ResourceKind:  "apps/v1.Deployment",
 		CompositionID: "550e8400-e29b-41d4-a716-446655440000",
 		Limit:         50,
 	}
@@ -572,7 +603,7 @@ func TestBuildListQuery_CompositionIDFilter(t *testing.T) {
 
 func TestBuildListQuery_NameFilter(t *testing.T) {
 	p := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Name:         "api",
 		Limit:        50,
 	}
@@ -599,7 +630,7 @@ func TestBuildListQuery_NameFilter(t *testing.T) {
 
 func TestBuildListQuery_LabelsFilter(t *testing.T) {
 	p := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Labels:       `{"app":"nginx"}`,
 		Limit:        50,
 	}
@@ -627,7 +658,7 @@ func TestBuildListQuery_LabelsFilter(t *testing.T) {
 func TestBuildListQuery_SinceFilter(t *testing.T) {
 	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	p := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Since:        &since,
 		Limit:        50,
 	}
@@ -659,7 +690,7 @@ func TestBuildListQuery_AllNewFilters(t *testing.T) {
 	cursor := EncodeCursor(&ResourcesCursor{UpdatedAt: cursorTime, ID: cursorID})
 
 	p := ListParams{
-		ResourceKind:  "apps/v1:Deployment",
+		ResourceKind:  "apps/v1.Deployment",
 		Cluster:       "cluster-a",
 		Namespace:     "prod",
 		CompositionID: "550e8400-e29b-41d4-a716-446655440000",
@@ -708,14 +739,14 @@ func TestListResources_NameFilter(t *testing.T) {
 	created := now.Add(-24 * time.Hour)
 
 	rows := pgxmock.NewRows(baseCols()).
-		AddRow("my-api-service", "prod", "apps/v1:Deployment", "cluster-a", created, now, nil, int64(1))
+		AddRow("my-api-service", "prod", "apps/v1.Deployment", "cluster-a", created, now, nil, int64(1))
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("apps/v1:Deployment", "%api%", 51).
+		WithArgs("apps/v1.Deployment", "%api%", 51).
 		WillReturnRows(rows)
 
 	params := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Name:         "api",
 		Limit:        50,
 	}
@@ -748,14 +779,14 @@ func TestListResources_LabelsFilter(t *testing.T) {
 	created := now.Add(-24 * time.Hour)
 
 	rows := pgxmock.NewRows(baseCols()).
-		AddRow("nginx", "prod", "apps/v1:Deployment", "cluster-a", created, now, nil, int64(1))
+		AddRow("nginx", "prod", "apps/v1.Deployment", "cluster-a", created, now, nil, int64(1))
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("apps/v1:Deployment", `{"app":"nginx"}`, 51).
+		WithArgs("apps/v1.Deployment", `{"app":"nginx"}`, 51).
 		WillReturnRows(rows)
 
 	params := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Labels:       `{"app":"nginx"}`,
 		Limit:        50,
 	}
@@ -786,14 +817,14 @@ func TestListResources_SinceFilter(t *testing.T) {
 	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 
 	rows := pgxmock.NewRows(baseCols()).
-		AddRow("nginx", "prod", "apps/v1:Deployment", "cluster-a", created, now, nil, int64(1))
+		AddRow("nginx", "prod", "apps/v1.Deployment", "cluster-a", created, now, nil, int64(1))
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("apps/v1:Deployment", since, 51).
+		WithArgs("apps/v1.Deployment", since, 51).
 		WillReturnRows(rows)
 
 	params := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Since:        &since,
 		Limit:        50,
 	}
@@ -822,7 +853,7 @@ func TestBuildListQuery_PlaceholderIndexing(t *testing.T) {
 	cursor := EncodeCursor(&ResourcesCursor{UpdatedAt: cursorTime, ID: cursorID})
 
 	p := ListParams{
-		ResourceKind:  "apps/v1:Deployment",
+		ResourceKind:  "apps/v1.Deployment",
 		Cluster:       "cluster-a",
 		Namespace:     "prod",
 		CompositionID: "550e8400-e29b-41d4-a716-446655440000",
@@ -878,7 +909,7 @@ func TestBuildListQuery_PlaceholderIndexing(t *testing.T) {
 
 func TestBuildListQuery_InvalidCursor(t *testing.T) {
 	p := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Limit:        50,
 		Cursor:       "!!!invalid!!!",
 	}
@@ -899,7 +930,7 @@ func TestListResources_InvalidCursor(t *testing.T) {
 	defer mock.Close()
 
 	params := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Limit:        50,
 		Cursor:       "!!!not-base64!!!",
 	}
@@ -922,11 +953,11 @@ func TestListResources_QueryError(t *testing.T) {
 	defer mock.Close()
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("apps/v1:Deployment", 51).
+		WithArgs("apps/v1.Deployment", 51).
 		WillReturnError(fmt.Errorf("connection refused"))
 
 	params := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Limit:        50,
 	}
 
@@ -957,14 +988,14 @@ func TestListResources_ClusterFilter(t *testing.T) {
 	created := now.Add(-24 * time.Hour)
 
 	rows := pgxmock.NewRows(baseCols()).
-		AddRow("nginx", "prod", "apps/v1:Deployment", "cluster-a", created, now, nil, int64(1))
+		AddRow("nginx", "prod", "apps/v1.Deployment", "cluster-a", created, now, nil, int64(1))
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("apps/v1:Deployment", "cluster-a", 51).
+		WithArgs("apps/v1.Deployment", "cluster-a", 51).
 		WillReturnRows(rows)
 
 	params := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Cluster:      "cluster-a",
 		Limit:        50,
 	}
@@ -995,14 +1026,14 @@ func TestListResources_CompositionIDFilter(t *testing.T) {
 	compID := "550e8400-e29b-41d4-a716-446655440000"
 
 	rows := pgxmock.NewRows(baseCols()).
-		AddRow("nginx", "prod", "apps/v1:Deployment", "cluster-a", created, now, &compID, int64(1))
+		AddRow("nginx", "prod", "apps/v1.Deployment", "cluster-a", created, now, &compID, int64(1))
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("apps/v1:Deployment", "550e8400-e29b-41d4-a716-446655440000", 51).
+		WithArgs("apps/v1.Deployment", "550e8400-e29b-41d4-a716-446655440000", 51).
 		WillReturnRows(rows)
 
 	params := ListParams{
-		ResourceKind:  "apps/v1:Deployment",
+		ResourceKind:  "apps/v1.Deployment",
 		CompositionID: "550e8400-e29b-41d4-a716-446655440000",
 		Limit:         50,
 	}
@@ -1032,7 +1063,7 @@ func TestListResources_WithPolicy(t *testing.T) {
 	created := now.Add(-24 * time.Hour)
 
 	rows := pgxmock.NewRows(baseCols()).
-		AddRow("nginx", "prod", "apps/v1:Deployment", "cluster-a", created, now, nil, int64(1))
+		AddRow("nginx", "prod", "apps/v1.Deployment", "cluster-a", created, now, nil, int64(1))
 
 	policy := &access.Policy{
 		AllowedNamespaces: []string{"prod", "staging"},
@@ -1041,11 +1072,11 @@ func TestListResources_WithPolicy(t *testing.T) {
 
 	// resource_kind + allowed_namespaces + allowed_clusters + limit = 4
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("apps/v1:Deployment", []string{"prod", "staging"}, []string{"cluster-a"}, 51).
+		WithArgs("apps/v1.Deployment", []string{"prod", "staging"}, []string{"cluster-a"}, 51).
 		WillReturnRows(rows)
 
 	params := ListParams{
-		ResourceKind: "apps/v1:Deployment",
+		ResourceKind: "apps/v1.Deployment",
 		Limit:        50,
 	}
 
