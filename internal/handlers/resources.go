@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	xcontext "github.com/krateoplatformops/plumbing/context"
 	"github.com/krateoplatformops/plumbing/http/response"
 	"github.com/krateoplatformops/resources-presenter/internal/access"
 	"github.com/krateoplatformops/resources-presenter/internal/sql"
@@ -39,6 +40,9 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		totalStart := time.Now()
 
+		ctx := xcontext.BuildContext(r.Context())
+		traceId := xcontext.TraceId(ctx, false)
+
 		// Per-request state for the deferred log.
 		var (
 			resourceKind  string
@@ -64,6 +68,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
 				slog.String("handler", "resources"),
 				slog.String("method", r.Method),
 				slog.String("resource_kind", resourceKind),
+				slog.String("trace_id", traceId),
 				slog.Int("status_code", statusCode),
 				slog.Int("rows_returned", rowsReturned),
 				slog.Group("duration_ms",
