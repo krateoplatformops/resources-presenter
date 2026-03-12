@@ -12,13 +12,34 @@ import (
 	"syscall"
 	"time"
 
+	xcontext "github.com/krateoplatformops/plumbing/context"
+	"github.com/krateoplatformops/plumbing/kubeutil/rbac"
 	"github.com/krateoplatformops/plumbing/pgutil"
 	"github.com/krateoplatformops/plumbing/server/probes"
 	"github.com/krateoplatformops/plumbing/server/use"
 	"github.com/krateoplatformops/plumbing/server/use/cors"
 	"github.com/krateoplatformops/resources-presenter/internal/config"
 	"github.com/krateoplatformops/resources-presenter/internal/handlers"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+// rbacAuthorizer implements handlers.Authorizer using plumbing's rbac.UserCan.
+type rbacAuthorizer struct{}
+
+func (rbacAuthorizer) CanGet(ctx context.Context, group, resource, namespace string) bool {
+	// Extract the user endpoint from context (set by use.UserConfig middleware).
+	ep, err := xcontext.UserConfig(ctx)
+	if err != nil {
+		return false
+	}
+
+	return rbac.UserCan(ctx, rbac.UserCanOptions{
+		UserConfig:    ep,
+		Verb:          "get",
+		GroupResource: schema.GroupResource{Group: group, Resource: resource},
+		Namespace:     namespace,
+	})
+}
 
 func main() {
 	cfg := config.Setup()
@@ -39,7 +60,6 @@ func main() {
 
 	// HTTP server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/resources", handlers.ResourcesHandler(pool, cfg.Log))
 	probes.Register(mux, cfg.Log, pool, time.Second)
 
 	chain := use.NewChain(
@@ -61,9 +81,16 @@ func main() {
 		}),
 	)
 
+	// Authenticated routes: append use.UserConfig so the handler can extract
+	// the user's Endpoint from context for RBAC checks.
+	authChain := chain.Append(use.UserConfig(cfg.SigningKey, cfg.AuthnNS))
+
+	auth := rbacAuthorizer{}
+	mux.Handle("/resources", authChain.Then(handlers.ResourcesHandler(pool, cfg.Log, auth)))
+
 	server := &http.Server{
 		Addr:         ":" + strconv.Itoa(cfg.Port),
-		Handler:      chain.Then(mux),
+		Handler:      mux,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

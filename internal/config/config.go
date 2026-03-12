@@ -24,6 +24,14 @@ type Config struct {
 	DbURL          string
 	DbReadyTimeout time.Duration
 	Log            *slog.Logger
+
+	// SigningKey is the HMAC key used to validate JWT tokens (HS256).
+	SigningKey string
+	// AuthnNS is the Kubernetes namespace where user clientconfig secrets are stored.
+	AuthnNS string
+
+	KubernetesServiceHost string
+	KubernetesServicePort string
 }
 
 func Setup() *Config {
@@ -73,6 +81,26 @@ func Setup() *Config {
 		"maximum time to wait for PostgreSQL to become ready",
 	)
 
+	cfgSignKey := flag.String("sign-key",
+		env.String("SIGN_KEY", ""),
+		"HMAC signing key for JWT validation",
+	)
+
+	cfgAuthnNS := flag.String("authn-ns",
+		env.String("AUTHN_NS", ""),
+		"Kubernetes namespace where user clientconfig secrets are stored",
+	)
+
+	//cfgKubernetesServiceHost := flag.String("kubernetes-service-host",
+	//	env.String("KUBERNETES_SERVICE_HOST", ""),
+	//	"Kubernetes service host",
+	//)
+
+	//cfgKubernetesServicePort := flag.String("kubernetes-service-port",
+	//	env.String("KUBERNETES_SERVICE_PORT", ""),
+	//	"Kubernetes service port",
+	//)
+
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Flags:")
 		flag.PrintDefaults()
@@ -83,6 +111,10 @@ func Setup() *Config {
 	cfg.Port = *cfgPort
 	cfg.Debug = *cfgDebug
 	cfg.DbReadyTimeout = *cfgDbReadyTimeout
+	cfg.SigningKey = *cfgSignKey
+	cfg.AuthnNS = *cfgAuthnNS
+	//cfg.KubernetesServiceHost = *cfgKubernetesServiceHost
+	//cfg.KubernetesServicePort = *cfgKubernetesServicePort
 
 	cfg.Log = logutil.New(serviceName, cfg.Debug)
 

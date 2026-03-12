@@ -1,0 +1,36 @@
+# deploy/test-user-rbac.yaml — RBAC for the E2E test user.
+#
+# Grants the "devs" group (used by krateoctl add-user -g devs) permission
+# to GET panels in the krateo-system namespace.
+#
+# This is what rbac.UserCan() checks via SelfSubjectAccessReview:
+# the test user's client certificate has Organization=devs, so K8s maps
+# that to group "devs". This Role grants that group the "get" verb on
+# the "panels" resource in the widgets.templates.krateo.io API group.
+#
+# Usage:
+#   kubectl apply -f deploy/test-user-rbac.yaml
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: e2e-test-user-panels
+  namespace: krateo-system
+rules:
+  - apiGroups: ["widgets.templates.krateo.io"]
+    resources: ["panels"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: e2e-test-user-panels
+  namespace: krateo-system
+subjects:
+  - kind: Group
+    name: devs
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: e2e-test-user-panels
+  apiGroup: rbac.authorization.k8s.io

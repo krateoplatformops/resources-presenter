@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/krateoplatformops/resources-presenter/internal/access"
 )
 
 // Querier abstracts the pgx query interface so it can be mocked in tests.
@@ -59,8 +58,8 @@ type rowCursor struct {
 
 // ListResources queries krateo_resources with the given filters, keyset pagination,
 // and access policy. It fetches limit+1 rows to determine if a next page exists.
-func ListResources(ctx context.Context, db Querier, p ListParams, policy *access.Policy) (*ListResult, error) {
-	query, args, err := buildListQuery(p, policy)
+func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, error) {
+	query, args, err := buildListQuery(p)
 	if err != nil {
 		return nil, fmt.Errorf("cursor: %w", err)
 	}
@@ -151,7 +150,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams, policy *access
 
 // buildListQuery constructs the SQL and args for listing resources
 // using the Builder from this package.
-func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) {
+func buildListQuery(p ListParams) (string, []any, error) {
 	b := NewBuilder()
 
 	// resource_kind is required
@@ -179,20 +178,6 @@ func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) 
 
 	if p.Since != nil {
 		b.Where("updated_at >= ?", *p.Since)
-	}
-
-	// TODO(auth): when policy is non-nil, add access control filters here.
-	// NOTE: The ANY(?) clauses below rely on pgx automatically encoding []string
-	// as a PostgreSQL array parameter. If the database driver is ever changed, this
-	// implicit conversion may break. The positional parameter ($N) receives a Go
-	// slice which pgx serializes as '{val1,val2,...}'.
-	if policy != nil {
-		if len(policy.AllowedNamespaces) > 0 {
-			b.Where("namespace = ANY(?)", policy.AllowedNamespaces)
-		}
-		if len(policy.AllowedClusters) > 0 {
-			b.Where("cluster_name = ANY(?)", policy.AllowedClusters)
-		}
 	}
 
 	// Keyset pagination cursor

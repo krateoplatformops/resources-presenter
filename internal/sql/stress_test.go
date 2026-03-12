@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/krateoplatformops/resources-presenter/internal/access"
 	"github.com/pashagolub/pgxmock/v4"
 )
 
@@ -42,7 +41,7 @@ func TestListResources_MaxLimit(t *testing.T) {
 		Limit:        limit,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -88,7 +87,7 @@ func TestListResources_MaxLimitWithNextPage(t *testing.T) {
 		Limit:        limit,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -152,7 +151,7 @@ func TestListResources_RawLargePayload(t *testing.T) {
 		Limit:        50,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -212,7 +211,7 @@ func TestListResources_ConcurrentAccess(t *testing.T) {
 				Limit:        50,
 			}
 
-			result, err := ListResources(context.Background(), mock, params, nil)
+			result, err := ListResources(context.Background(), mock, params)
 			if err != nil {
 				errs <- fmt.Errorf("goroutine %d: %w", id, err)
 				return
@@ -261,76 +260,55 @@ func TestBuildListQuery_AllFilterCombinations(t *testing.T) {
 		{"since", func(p *ListParams) { p.Since = &since }, 1},
 	}
 
-	// Also test with access policy.
-	policies := []*access.Policy{
-		nil,
-		{AllowedNamespaces: []string{"prod"}, AllowedClusters: []string{"cluster-a"}},
-	}
+	// Iterate over all 2^6 = 64 bitmask combinations.
+	for mask := 0; mask < (1 << len(filters)); mask++ {
+		p := ListParams{
+			ResourceKind: "apps/v1.Deployment",
+			Limit:        50,
+		}
 
-	for _, policy := range policies {
-		policyName := "no-policy"
-		policyArgs := 0
-		if policy != nil {
-			policyName = "with-policy"
-			if len(policy.AllowedNamespaces) > 0 {
-				policyArgs++
-			}
-			if len(policy.AllowedClusters) > 0 {
-				policyArgs++
+		var names []string
+		expectedArgs := 1 // resource_kind is always present
+		for i, f := range filters {
+			if mask&(1<<i) != 0 {
+				f.apply(&p)
+				names = append(names, f.name)
+				expectedArgs += f.args
 			}
 		}
 
-		// Iterate over all 2^6 = 64 bitmask combinations.
-		for mask := 0; mask < (1 << len(filters)); mask++ {
-			p := ListParams{
-				ResourceKind: "apps/v1.Deployment",
-				Limit:        50,
-			}
-
-			var names []string
-			expectedArgs := 1 // resource_kind is always present
-			for i, f := range filters {
-				if mask&(1<<i) != 0 {
-					f.apply(&p)
-					names = append(names, f.name)
-					expectedArgs += f.args
-				}
-			}
-
-			// Add cursor for odd masks to test cursor interplay.
-			hasCursor := mask%3 == 0 && mask > 0
-			if hasCursor {
-				p.Cursor = cursor
-				expectedArgs += 2 // cursor adds 2 args
-				names = append(names, "cursor")
-			}
-
-			expectedArgs += policyArgs
-			expectedArgs++ // limit
-
-			testName := policyName
-			if len(names) > 0 {
-				testName += "+" + names[0]
-				for _, n := range names[1:] {
-					testName += "+" + n
-				}
-			} else {
-				testName += "+none"
-			}
-
-			t.Run(testName, func(t *testing.T) {
-				query, args, err := buildListQuery(p, policy)
-				if err != nil {
-					t.Fatalf("error: %v", err)
-				}
-				if len(args) != expectedArgs {
-					t.Fatalf("expected %d args, got %d\nquery: %s\nargs: %v", expectedArgs, len(args), query, args)
-				}
-				if query == "" {
-					t.Fatal("empty query")
-				}
-			})
+		// Add cursor for odd masks to test cursor interplay.
+		hasCursor := mask%3 == 0 && mask > 0
+		if hasCursor {
+			p.Cursor = cursor
+			expectedArgs += 2 // cursor adds 2 args
+			names = append(names, "cursor")
 		}
+
+		expectedArgs++ // limit
+
+		testName := "filters"
+		if len(names) > 0 {
+			testName += "+" + names[0]
+			for _, n := range names[1:] {
+				testName += "+" + n
+			}
+		} else {
+			testName += "+none"
+		}
+
+		t.Run(testName, func(t *testing.T) {
+			query, args, err := buildListQuery(p)
+			if err != nil {
+				t.Fatalf("error: %v", err)
+			}
+			if len(args) != expectedArgs {
+				t.Fatalf("expected %d args, got %d\nquery: %s\nargs: %v", expectedArgs, len(args), query, args)
+			}
+			if query == "" {
+				t.Fatal("empty query")
+			}
+		})
 	}
 }
 

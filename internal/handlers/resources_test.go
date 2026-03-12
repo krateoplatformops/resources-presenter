@@ -21,17 +21,34 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// --- Test authorizers ---
+
+// allowAllAuthorizer always allows access (used by most tests).
+type allowAllAuthorizer struct{}
+
+func (allowAllAuthorizer) CanGet(ctx context.Context, group, resource, namespace string) bool {
+	return true
+}
+
+// denyAllAuthorizer always denies access (used by RBAC denial tests).
+type denyAllAuthorizer struct{}
+
+func (denyAllAuthorizer) CanGet(ctx context.Context, group, resource, namespace string) bool {
+	return false
+}
+
 // testLogger returns a discard logger for tests.
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
 
-// resourceQuery builds a query string for /resources with the required group/version/kind
+// resourceQuery builds a query string for /resources with the required group/version/kind/resource
 // plus any additional filters.
-func resourceQuery(group, version, kind string, extra map[string]string) string {
+func resourceQuery(group, version, kind, resource string, extra map[string]string) string {
 	u := "/resources?group=" + url.QueryEscape(group) +
 		"&version=" + url.QueryEscape(version) +
-		"&kind=" + url.QueryEscape(kind)
+		"&kind=" + url.QueryEscape(kind) +
+		"&resource=" + url.QueryEscape(resource)
 	for k, v := range extra {
 		u += "&" + k + "=" + v
 	}
@@ -40,11 +57,11 @@ func resourceQuery(group, version, kind string, extra map[string]string) string 
 
 // Shorthand for the two resource types used in tests.
 func deploymentQuery(extra map[string]string) string {
-	return resourceQuery("apps", "v1", "Deployment", extra)
+	return resourceQuery("apps", "v1", "Deployment", "deployments", extra)
 }
 
 func panelQuery(extra map[string]string) string {
-	return resourceQuery("widgets.templates.krateo.io", "v1beta1", "Panel", extra)
+	return resourceQuery("widgets.templates.krateo.io", "v1beta1", "Panel", "panels", extra)
 }
 
 // --- Integration test: multi-page pagination ---
@@ -66,7 +83,7 @@ func TestResourcesPagination_MultiPage(t *testing.T) {
 		Delta:        time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
 	const pageSize = 100
 
@@ -77,11 +94,14 @@ func TestResourcesPagination_MultiPage(t *testing.T) {
 	)
 
 	for {
-		extra := map[string]string{"limit": fmt.Sprintf("%d", pageSize)}
+		extra := map[string]string{
+			"limit":     fmt.Sprintf("%d", pageSize),
+			"namespace": "default",
+		}
 		if cursor != "" {
 			extra["cursor"] = cursor
 		}
-		resp := callResourcesGET(t, handler, "apps", "v1", "Deployment", extra)
+		resp := callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", extra)
 
 		items := extractItems(t, resp)
 
@@ -147,11 +167,12 @@ func TestResourcesFilter_NamespaceAndCluster(t *testing.T) {
 		Delta:        time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
-	// Filter by cluster only.
-	resp := callResourcesGET(t, handler, "apps", "v1", "Deployment", map[string]string{
-		"cluster": "cluster-a",
+	// Filter by cluster + namespace (namespace is now required).
+	resp := callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
+		"cluster":   "cluster-a",
+		"namespace": "prod",
 	})
 	items := extractItems(t, resp)
 	if len(items) != 10 {
@@ -159,7 +180,7 @@ func TestResourcesFilter_NamespaceAndCluster(t *testing.T) {
 	}
 
 	// Filter by namespace only.
-	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", map[string]string{
+	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
 		"namespace": "staging",
 	})
 	items = extractItems(t, resp)
@@ -168,7 +189,7 @@ func TestResourcesFilter_NamespaceAndCluster(t *testing.T) {
 	}
 
 	// Filter by both.
-	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", map[string]string{
+	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
 		"cluster":   "cluster-a",
 		"namespace": "prod",
 	})
@@ -178,8 +199,9 @@ func TestResourcesFilter_NamespaceAndCluster(t *testing.T) {
 	}
 
 	// Non-matching filter returns empty list, not error.
-	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", map[string]string{
-		"cluster": "cluster-nonexistent",
+	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
+		"cluster":   "cluster-nonexistent",
+		"namespace": "prod",
 	})
 	items = extractItems(t, resp)
 	if len(items) != 0 {
@@ -206,10 +228,12 @@ func TestResourcesRawFlag(t *testing.T) {
 		Delta:        time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
 	// Without raw: items should have no raw field.
-	resp := callResourcesGET(t, handler, "apps", "v1", "Deployment", nil)
+	resp := callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
+		"namespace": "default",
+	})
 	items := extractItems(t, resp)
 	if len(items) != 3 {
 		t.Fatalf("expected 3 items, got %d", len(items))
@@ -220,8 +244,9 @@ func TestResourcesRawFlag(t *testing.T) {
 	}
 
 	// With raw=true: items should include raw JSONB.
-	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", map[string]string{
-		"raw": "true",
+	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
+		"raw":       "true",
+		"namespace": "default",
 	})
 	items = extractItems(t, resp)
 	if len(items) != 3 {
@@ -247,7 +272,7 @@ func TestResourcesMissingKind(t *testing.T) {
 	db, cleanup := setupTestPostgres(t)
 	defer cleanup()
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
 	// No group/version/kind at all.
 	req := httptest.NewRequest("GET", "/resources", nil)
@@ -265,6 +290,49 @@ func TestResourcesMissingKind(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- Integration test: missing namespace returns 400 ---
+
+func TestResourcesMissingNamespace(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+
+	// Valid group/version/kind/resource but no namespace.
+	req := httptest.NewRequest("GET", "/resources?group=apps&version=v1&kind=Deployment&resource=deployments", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing namespace, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if !strings.Contains(rec.Body.String(), "namespace") {
+		t.Fatalf("expected error message to mention namespace, got: %s", rec.Body.String())
+	}
+}
+
+// --- Integration test: RBAC denial returns 403 ---
+
+func TestResourcesRBACDenied(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	handler := ResourcesHandler(db, testLogger(), denyAllAuthorizer{})
+
+	req := httptest.NewRequest("GET", deploymentQuery(map[string]string{"namespace": "default"}), nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if !strings.Contains(rec.Body.String(), "forbidden") {
+		t.Fatalf("expected error message to mention forbidden, got: %s", rec.Body.String())
 	}
 }
 
@@ -293,11 +361,12 @@ func TestResourcesFilter_Name(t *testing.T) {
 		},
 	})
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
 	// Search for "api" — should match "my-api-service", "api-gateway", "API-v2" (case-insensitive).
-	resp := callResourcesGET(t, handler, "apps", "v1", "Deployment", map[string]string{
-		"name": "api",
+	resp := callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
+		"name":      "api",
+		"namespace": "prod",
 	})
 	items := extractItems(t, resp)
 	if len(items) != 3 {
@@ -305,8 +374,9 @@ func TestResourcesFilter_Name(t *testing.T) {
 	}
 
 	// Search for "frontend" — should match only "frontend-app".
-	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", map[string]string{
-		"name": "frontend",
+	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
+		"name":      "frontend",
+		"namespace": "prod",
 	})
 	items = extractItems(t, resp)
 	if len(items) != 1 {
@@ -314,8 +384,9 @@ func TestResourcesFilter_Name(t *testing.T) {
 	}
 
 	// Search for non-existing name returns empty.
-	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", map[string]string{
-		"name": "nonexistent",
+	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
+		"name":      "nonexistent",
+		"namespace": "prod",
 	})
 	items = extractItems(t, resp)
 	if len(items) != 0 {
@@ -346,11 +417,12 @@ func TestResourcesFilter_Labels(t *testing.T) {
 		},
 	})
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
 	// Filter by single label.
-	resp := callResourcesGET(t, handler, "apps", "v1", "Deployment", map[string]string{
-		"labels": url.QueryEscape(`{"app":"nginx"}`),
+	resp := callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
+		"labels":    url.QueryEscape(`{"app":"nginx"}`),
+		"namespace": "prod",
 	})
 	items := extractItems(t, resp)
 	if len(items) != 2 {
@@ -358,8 +430,9 @@ func TestResourcesFilter_Labels(t *testing.T) {
 	}
 
 	// Filter by two labels (AND — both must match).
-	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", map[string]string{
-		"labels": url.QueryEscape(`{"app":"nginx","tier":"backend"}`),
+	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
+		"labels":    url.QueryEscape(`{"app":"nginx","tier":"backend"}`),
+		"namespace": "prod",
 	})
 	items = extractItems(t, resp)
 	if len(items) != 1 {
@@ -367,8 +440,9 @@ func TestResourcesFilter_Labels(t *testing.T) {
 	}
 
 	// Non-matching labels returns empty.
-	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", map[string]string{
-		"labels": url.QueryEscape(`{"app":"nonexistent"}`),
+	resp = callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
+		"labels":    url.QueryEscape(`{"app":"nonexistent"}`),
+		"namespace": "prod",
 	})
 	items = extractItems(t, resp)
 	if len(items) != 0 {
@@ -396,12 +470,13 @@ func TestResourcesFilter_Since(t *testing.T) {
 		Delta:        time.Hour,
 	})
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
 	// Since 5 hours ago: should get 5 resources (updated_at >= now-5h).
 	sinceTime := now.Add(-4*time.Hour - 30*time.Minute) // between res-4 and res-5
-	resp := callResourcesGET(t, handler, "apps", "v1", "Deployment", map[string]string{
-		"since": sinceTime.Format(time.RFC3339),
+	resp := callResourcesGET(t, handler, "apps", "v1", "Deployment", "deployments", map[string]string{
+		"since":     sinceTime.Format(time.RFC3339),
+		"namespace": "prod",
 	})
 	items := extractItems(t, resp)
 	if len(items) != 5 {
@@ -436,14 +511,16 @@ func TestResourcesPOST_BasicQuery(t *testing.T) {
 		Delta:        time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
 	// POST with cluster filter.
 	resp := callResourcesPOST(t, handler, map[string]any{
-		"group":   "apps",
-		"version": "v1",
-		"kind":    "Deployment",
-		"cluster": "cluster-a",
+		"group":     "apps",
+		"version":   "v1",
+		"kind":      "Deployment",
+		"resource":  "deployments",
+		"cluster":   "cluster-a",
+		"namespace": "prod",
 	})
 	items := extractItems(t, resp)
 	if len(items) != 5 {
@@ -455,6 +532,7 @@ func TestResourcesPOST_BasicQuery(t *testing.T) {
 		"group":     "apps",
 		"version":   "v1",
 		"kind":      "Deployment",
+		"resource":  "deployments",
 		"namespace": "staging",
 	})
 	items = extractItems(t, resp)
@@ -464,12 +542,14 @@ func TestResourcesPOST_BasicQuery(t *testing.T) {
 
 	// POST with raw=true.
 	resp = callResourcesPOST(t, handler, map[string]any{
-		"group":   "apps",
-		"version": "v1",
-		"kind":    "Deployment",
-		"cluster": "cluster-a",
-		"raw":     true,
-		"limit":   2,
+		"group":     "apps",
+		"version":   "v1",
+		"kind":      "Deployment",
+		"resource":  "deployments",
+		"cluster":   "cluster-a",
+		"namespace": "prod",
+		"raw":       true,
+		"limit":     2,
 	})
 	items = extractItems(t, resp)
 	if len(items) != 2 {
@@ -498,15 +578,17 @@ func TestResourcesPOST_Pagination(t *testing.T) {
 		Delta:        time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
 	// Page 1.
 	resp := callResourcesPOST(t, handler, map[string]any{
-		"group":   "apps",
-		"version": "v1",
-		"kind":    "Deployment",
-		"cluster": "cluster-a",
-		"limit":   2,
+		"group":     "apps",
+		"version":   "v1",
+		"kind":      "Deployment",
+		"resource":  "deployments",
+		"cluster":   "cluster-a",
+		"namespace": "prod",
+		"limit":     2,
 	})
 	items := extractItems(t, resp)
 	if len(items) != 2 {
@@ -519,12 +601,14 @@ func TestResourcesPOST_Pagination(t *testing.T) {
 
 	// Page 2 with cursor.
 	resp = callResourcesPOST(t, handler, map[string]any{
-		"group":   "apps",
-		"version": "v1",
-		"kind":    "Deployment",
-		"cluster": "cluster-a",
-		"limit":   2,
-		"cursor":  cursor,
+		"group":     "apps",
+		"version":   "v1",
+		"kind":      "Deployment",
+		"resource":  "deployments",
+		"cluster":   "cluster-a",
+		"namespace": "prod",
+		"limit":     2,
+		"cursor":    cursor,
 	})
 	items = extractItems(t, resp)
 	if len(items) != 2 {
@@ -536,7 +620,7 @@ func TestResourcesPOST_ValidationErrors(t *testing.T) {
 	db, cleanup := setupTestPostgres(t)
 	defer cleanup()
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
 	tests := []struct {
 		name       string
@@ -550,7 +634,7 @@ func TestResourcesPOST_ValidationErrors(t *testing.T) {
 		},
 		{
 			name:       "unknown field returns 400",
-			body:       `{"group":"apps","version":"v1","kind":"Deployment","unknownField":"x"}`,
+			body:       `{"group":"apps","version":"v1","kind":"Deployment","resource":"deployments","namespace":"default","unknownField":"x"}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
@@ -560,22 +644,27 @@ func TestResourcesPOST_ValidationErrors(t *testing.T) {
 		},
 		{
 			name:       "multiple JSON values returns 400",
-			body:       `{"group":"apps","version":"v1","kind":"Deployment"}{"group":"apps","version":"v1","kind":"Deployment"}`,
+			body:       `{"group":"apps","version":"v1","kind":"Deployment","resource":"deployments","namespace":"default"}{"group":"apps","version":"v1","kind":"Deployment","resource":"deployments","namespace":"default"}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "invalid composition_id returns 400",
-			body:       `{"group":"apps","version":"v1","kind":"Deployment","composition_id":"not-a-uuid"}`,
+			body:       `{"group":"apps","version":"v1","kind":"Deployment","resource":"deployments","namespace":"default","composition_id":"not-a-uuid"}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "missing group/version/kind returns 400",
-			body:       `{"cluster":"a"}`,
+			body:       `{"cluster":"a","namespace":"default"}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "invalid cursor returns 400",
-			body:       `{"group":"apps","version":"v1","kind":"Deployment","cursor":"!!!not-base64!!!"}`,
+			body:       `{"group":"apps","version":"v1","kind":"Deployment","resource":"deployments","namespace":"default","cursor":"!!!not-base64!!!"}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "missing namespace returns 400",
+			body:       `{"group":"apps","version":"v1","kind":"Deployment"}`,
 			wantStatus: http.StatusBadRequest,
 		},
 	}
@@ -606,10 +695,10 @@ func TestResourcesMethodNotAllowed(t *testing.T) {
 	db, cleanup := setupTestPostgres(t)
 	defer cleanup()
 
-	handler := ResourcesHandler(db, testLogger())
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
 	for _, method := range []string{"PUT", "DELETE", "PATCH"} {
-		req := httptest.NewRequest(method, deploymentQuery(nil), nil)
+		req := httptest.NewRequest(method, deploymentQuery(map[string]string{"namespace": "default"}), nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
@@ -629,28 +718,33 @@ func TestParseRequest(t *testing.T) {
 		wantKind   string // expected resolved resource kind on success
 	}{
 		{
-			name:     "valid group/version/kind",
-			url:      "/resources?group=apps&version=v1&kind=Deployment",
+			name:     "valid group/version/kind/resource with namespace",
+			url:      "/resources?group=apps&version=v1&kind=Deployment&resource=deployments&namespace=default",
 			wantKind: "apps/v1.Deployment",
 		},
 		{
-			name:     "valid panel kind",
-			url:      "/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel",
+			name:     "valid panel kind with namespace",
+			url:      "/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&resource=panels&namespace=default",
 			wantKind: "widgets.templates.krateo.io/v1beta1.Panel",
 		},
 		{
 			name:       "missing group returns 400",
-			url:        "/resources?version=v1&kind=Deployment",
+			url:        "/resources?version=v1&kind=Deployment&resource=deployments&namespace=default",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "missing version returns 400",
-			url:        "/resources?group=apps&kind=Deployment",
+			url:        "/resources?group=apps&kind=Deployment&resource=deployments&namespace=default",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "missing kind returns 400",
-			url:        "/resources?group=apps&version=v1",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "missing resource returns 400",
+			url:        "/resources?group=apps&version=v1&kind=Deployment&namespace=default",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
@@ -659,53 +753,58 @@ func TestParseRequest(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
+			name:       "missing namespace returns 400",
+			url:        "/resources?group=apps&version=v1&kind=Deployment&resource=deployments",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
 			name:     "query params parsed correctly",
-			url:      "/resources?group=apps&version=v1&kind=Deployment&cluster=c1&namespace=ns1&raw=true&limit=42&name=api",
+			url:      "/resources?group=apps&version=v1&kind=Deployment&resource=deployments&cluster=c1&namespace=ns1&raw=true&limit=42&name=api",
 			wantKind: "apps/v1.Deployment",
 		},
 		{
 			name:       "invalid limit returns 400",
-			url:        "/resources?group=apps&version=v1&kind=Deployment&limit=abc",
+			url:        "/resources?group=apps&version=v1&kind=Deployment&resource=deployments&namespace=default&limit=abc",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "invalid composition_id returns 400",
-			url:        "/resources?group=apps&version=v1&kind=Deployment&composition_id=not-a-uuid",
+			url:        "/resources?group=apps&version=v1&kind=Deployment&resource=deployments&namespace=default&composition_id=not-a-uuid",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:     "valid composition_id accepted",
-			url:      "/resources?group=apps&version=v1&kind=Deployment&composition_id=550e8400-e29b-41d4-a716-446655440000",
+			url:      "/resources?group=apps&version=v1&kind=Deployment&resource=deployments&namespace=default&composition_id=550e8400-e29b-41d4-a716-446655440000",
 			wantKind: "apps/v1.Deployment",
 		},
 		{
 			name:       "invalid labels JSON returns 400",
-			url:        "/resources?group=apps&version=v1&kind=Deployment&labels=not-json",
+			url:        "/resources?group=apps&version=v1&kind=Deployment&resource=deployments&namespace=default&labels=not-json",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:     "valid labels JSON accepted",
-			url:      `/resources?group=apps&version=v1&kind=Deployment&labels={"app":"nginx"}`,
+			url:      `/resources?group=apps&version=v1&kind=Deployment&resource=deployments&namespace=default&labels={"app":"nginx"}`,
 			wantKind: "apps/v1.Deployment",
 		},
 		{
 			name:       "invalid since returns 400",
-			url:        "/resources?group=apps&version=v1&kind=Deployment&since=not-a-timestamp",
+			url:        "/resources?group=apps&version=v1&kind=Deployment&resource=deployments&namespace=default&since=not-a-timestamp",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:     "valid since accepted",
-			url:      "/resources?group=apps&version=v1&kind=Deployment&since=2026-03-01T00:00:00Z",
+			url:      "/resources?group=apps&version=v1&kind=Deployment&resource=deployments&namespace=default&since=2026-03-01T00:00:00Z",
 			wantKind: "apps/v1.Deployment",
 		},
 		{
 			name:       "invalid cursor (bad base64) returns 400",
-			url:        "/resources?group=apps&version=v1&kind=Deployment&cursor=!!!not-base64!!!",
+			url:        "/resources?group=apps&version=v1&kind=Deployment&resource=deployments&namespace=default&cursor=!!!not-base64!!!",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "invalid cursor (bad JSON inside) returns 400",
-			url:        "/resources?group=apps&version=v1&kind=Deployment&cursor=bm90LWpzb24=",
+			url:        "/resources?group=apps&version=v1&kind=Deployment&resource=deployments&namespace=default&cursor=bm90LWpzb24=",
 			wantStatus: http.StatusBadRequest,
 		},
 	}
@@ -713,7 +812,7 @@ func TestParseRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", tt.url, nil)
-			params, _, herr := parseRequest(req)
+			params, herr := parseRequest(req)
 
 			if tt.wantStatus != 0 {
 				if herr == nil {
@@ -767,6 +866,7 @@ func TestParseListParamsJSON_OK(t *testing.T) {
 		"group":"apps",
 		"version":"v1",
 		"kind":"Deployment",
+		"resource":"deployments",
 		"cluster":"cluster-a",
 		"namespace":"prod",
 		"composition_id":"550e8400-e29b-41d4-a716-446655440000",
@@ -781,11 +881,17 @@ func TestParseListParamsJSON_OK(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
-	got, err := parseListParamsJSON(req)
+	got, group, resource, err := parseListParamsJSON(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	if group != "apps" {
+		t.Fatalf("unexpected group: %q", group)
+	}
+	if resource != "deployments" {
+		t.Fatalf("unexpected resource: %q", resource)
+	}
 	if got.ResourceKind != "apps/v1.Deployment" {
 		t.Fatalf("unexpected ResourceKind: %q", got.ResourceKind)
 	}
@@ -819,8 +925,8 @@ func TestParseListParamsJSON_OK(t *testing.T) {
 }
 
 func TestParseListParamsJSON_DefaultLimit(t *testing.T) {
-	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","kind":"Deployment","limit":0}`))
-	got, err := parseListParamsJSON(req)
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","kind":"Deployment","resource":"deployments","namespace":"default","limit":0}`))
+	got, _, _, err := parseListParamsJSON(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -830,8 +936,8 @@ func TestParseListParamsJSON_DefaultLimit(t *testing.T) {
 }
 
 func TestParseListParamsJSON_UnknownField(t *testing.T) {
-	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","kind":"Deployment","bad":"x"}`))
-	_, err := parseListParamsJSON(req)
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","kind":"Deployment","resource":"deployments","namespace":"default","bad":"x"}`))
+	_, _, _, err := parseListParamsJSON(req)
 	if err == nil {
 		t.Fatal("expected error for unknown field")
 	}
@@ -839,25 +945,63 @@ func TestParseListParamsJSON_UnknownField(t *testing.T) {
 
 func TestParseListParamsJSON_EmptyBody(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(""))
-	_, err := parseListParamsJSON(req)
+	_, _, _, err := parseListParamsJSON(req)
 	if err == nil {
 		t.Fatal("expected error for empty body")
 	}
 }
 
 func TestParseListParamsJSON_MultipleValues(t *testing.T) {
-	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","kind":"Deployment"}{"group":"apps","version":"v1","kind":"Deployment"}`))
-	_, err := parseListParamsJSON(req)
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","kind":"Deployment","resource":"deployments","namespace":"default"}{"group":"apps","version":"v1","kind":"Deployment","resource":"deployments","namespace":"default"}`))
+	_, _, _, err := parseListParamsJSON(req)
 	if err == nil {
 		t.Fatal("expected error for multiple JSON values")
 	}
 }
 
 func TestParseListParamsJSON_MissingKind(t *testing.T) {
-	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1"}`))
-	_, err := parseListParamsJSON(req)
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","namespace":"default"}`))
+	_, _, _, err := parseListParamsJSON(req)
 	if err == nil {
 		t.Fatal("expected error for missing kind")
+	}
+}
+
+// --- Integration test: POST missing namespace returns 400 ---
+
+func TestResourcesPOST_MissingNamespace(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+
+	body := `{"group":"apps","version":"v1","kind":"Deployment","resource":"deployments"}`
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for missing namespace in POST, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- Integration test: POST RBAC denied returns 403 ---
+
+func TestResourcesPOST_RBACDenied(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	handler := ResourcesHandler(db, testLogger(), denyAllAuthorizer{})
+
+	body := `{"group":"apps","version":"v1","kind":"Deployment","resource":"deployments","namespace":"default"}`
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for RBAC denied in POST, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -1001,16 +1145,16 @@ INSERT INTO krateo_resources (
 	}
 }
 
-// callResourcesGET sends a GET request with group/version/kind and optional extra params.
+// callResourcesGET sends a GET request with group/version/kind/resource and optional extra params.
 func callResourcesGET(
 	t *testing.T,
 	handler http.Handler,
-	group, version, kind string,
+	group, version, kind, resource string,
 	extra map[string]string,
 ) map[string]any {
 	t.Helper()
 
-	u := resourceQuery(group, version, kind, extra)
+	u := resourceQuery(group, version, kind, resource, extra)
 
 	req := httptest.NewRequest("GET", u, nil)
 	rec := httptest.NewRecorder()

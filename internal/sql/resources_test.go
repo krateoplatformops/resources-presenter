@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/krateoplatformops/resources-presenter/internal/access"
 	"github.com/pashagolub/pgxmock/v4"
 )
 
@@ -38,7 +37,7 @@ func TestListResources_NoResults(t *testing.T) {
 		Limit:        50,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -79,7 +78,7 @@ func TestListResources_SinglePage(t *testing.T) {
 		Limit:        50,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -153,7 +152,7 @@ func TestListResources_Paginated(t *testing.T) {
 		Limit:        limit,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -214,7 +213,7 @@ func TestListResources_RawTrue(t *testing.T) {
 		Limit:        50,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -273,7 +272,7 @@ func TestListResources_WithCursor(t *testing.T) {
 		Cursor:       cursor,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -319,7 +318,7 @@ func TestBuildListQuery_MinimalFilters(t *testing.T) {
 		Limit:        50,
 	}
 
-	query, args, err := buildListQuery(p, nil)
+	query, args, err := buildListQuery(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -358,7 +357,7 @@ func TestBuildListQuery_AllFilters(t *testing.T) {
 		Cursor:        cursor,
 	}
 
-	query, args, err := buildListQuery(p, nil)
+	query, args, err := buildListQuery(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -460,93 +459,6 @@ func TestValidateCursor_InvalidJSON(t *testing.T) {
 	}
 }
 
-// --- Access policy query builder tests ---
-
-func TestBuildListQuery_WithPolicy_NamespacesOnly(t *testing.T) {
-	p := ListParams{
-		ResourceKind: "apps/v1.Deployment",
-		Limit:        50,
-	}
-	policy := &access.Policy{
-		AllowedNamespaces: []string{"prod", "staging"},
-	}
-
-	query, args, err := buildListQuery(p, policy)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// resource_kind + allowed_namespaces + limit = 3
-	if len(args) != 3 {
-		t.Fatalf("expected 3 args, got %d: %v", len(args), args)
-	}
-
-	if !strings.Contains(query, "namespace = ANY") {
-		t.Errorf("expected namespace = ANY clause, got:\n%s", query)
-	}
-
-	t.Logf("query: %s", query)
-	t.Logf("args: %v", args)
-}
-
-func TestBuildListQuery_WithPolicy_ClustersOnly(t *testing.T) {
-	p := ListParams{
-		ResourceKind: "apps/v1.Deployment",
-		Limit:        50,
-	}
-	policy := &access.Policy{
-		AllowedClusters: []string{"cluster-a"},
-	}
-
-	query, args, err := buildListQuery(p, policy)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// resource_kind + allowed_clusters + limit = 3
-	if len(args) != 3 {
-		t.Fatalf("expected 3 args, got %d: %v", len(args), args)
-	}
-
-	if !strings.Contains(query, "cluster_name = ANY") {
-		t.Errorf("expected cluster_name = ANY clause, got:\n%s", query)
-	}
-
-	t.Logf("query: %s", query)
-	t.Logf("args: %v", args)
-}
-
-func TestBuildListQuery_WithPolicy_Both(t *testing.T) {
-	p := ListParams{
-		ResourceKind: "apps/v1.Deployment",
-		Limit:        50,
-	}
-	policy := &access.Policy{
-		AllowedNamespaces: []string{"prod"},
-		AllowedClusters:   []string{"cluster-a", "cluster-b"},
-	}
-
-	query, args, err := buildListQuery(p, policy)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// resource_kind + allowed_namespaces + allowed_clusters + limit = 4
-	if len(args) != 4 {
-		t.Fatalf("expected 4 args, got %d: %v", len(args), args)
-	}
-
-	if !strings.Contains(query, "namespace = ANY") {
-		t.Errorf("expected namespace = ANY clause, got:\n%s", query)
-	}
-	if !strings.Contains(query, "cluster_name = ANY") {
-		t.Errorf("expected cluster_name = ANY clause, got:\n%s", query)
-	}
-
-	t.Logf("query: %s", query)
-	t.Logf("args: %v", args)
-}
-
 // --- Filter-specific query builder tests ---
 
 func TestBuildListQuery_ClusterFilter(t *testing.T) {
@@ -556,7 +468,7 @@ func TestBuildListQuery_ClusterFilter(t *testing.T) {
 		Limit:        50,
 	}
 
-	query, args, err := buildListQuery(p, nil)
+	query, args, err := buildListQuery(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -581,7 +493,7 @@ func TestBuildListQuery_CompositionIDFilter(t *testing.T) {
 		Limit:         50,
 	}
 
-	query, args, err := buildListQuery(p, nil)
+	query, args, err := buildListQuery(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -608,7 +520,7 @@ func TestBuildListQuery_NameFilter(t *testing.T) {
 		Limit:        50,
 	}
 
-	query, args, err := buildListQuery(p, nil)
+	query, args, err := buildListQuery(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -635,7 +547,7 @@ func TestBuildListQuery_LabelsFilter(t *testing.T) {
 		Limit:        50,
 	}
 
-	query, args, err := buildListQuery(p, nil)
+	query, args, err := buildListQuery(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -663,7 +575,7 @@ func TestBuildListQuery_SinceFilter(t *testing.T) {
 		Limit:        50,
 	}
 
-	query, args, err := buildListQuery(p, nil)
+	query, args, err := buildListQuery(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -702,7 +614,7 @@ func TestBuildListQuery_AllNewFilters(t *testing.T) {
 		Cursor:        cursor,
 	}
 
-	query, args, err := buildListQuery(p, nil)
+	query, args, err := buildListQuery(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -751,7 +663,7 @@ func TestListResources_NameFilter(t *testing.T) {
 		Limit:        50,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -791,7 +703,7 @@ func TestListResources_LabelsFilter(t *testing.T) {
 		Limit:        50,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -829,7 +741,7 @@ func TestListResources_SinceFilter(t *testing.T) {
 		Limit:        50,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -865,7 +777,7 @@ func TestBuildListQuery_PlaceholderIndexing(t *testing.T) {
 		Cursor:        cursor,
 	}
 
-	query, args, err := buildListQuery(p, nil)
+	query, args, err := buildListQuery(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -914,7 +826,7 @@ func TestBuildListQuery_InvalidCursor(t *testing.T) {
 		Cursor:       "!!!invalid!!!",
 	}
 
-	_, _, err := buildListQuery(p, nil)
+	_, _, err := buildListQuery(p)
 	if err == nil {
 		t.Fatal("expected error for invalid cursor")
 	}
@@ -935,7 +847,7 @@ func TestListResources_InvalidCursor(t *testing.T) {
 		Cursor:       "!!!not-base64!!!",
 	}
 
-	_, err = ListResources(context.Background(), mock, params, nil)
+	_, err = ListResources(context.Background(), mock, params)
 	if err == nil {
 		t.Fatal("expected error for invalid cursor")
 	}
@@ -961,7 +873,7 @@ func TestListResources_QueryError(t *testing.T) {
 		Limit:        50,
 	}
 
-	_, err = ListResources(context.Background(), mock, params, nil)
+	_, err = ListResources(context.Background(), mock, params)
 	if err == nil {
 		t.Fatal("expected error for query failure")
 	}
@@ -1000,7 +912,7 @@ func TestListResources_ClusterFilter(t *testing.T) {
 		Limit:        50,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1038,7 +950,7 @@ func TestListResources_CompositionIDFilter(t *testing.T) {
 		Limit:         50,
 	}
 
-	result, err := ListResources(context.Background(), mock, params, nil)
+	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1052,44 +964,3 @@ func TestListResources_CompositionIDFilter(t *testing.T) {
 	}
 }
 
-func TestListResources_WithPolicy(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mock.Close()
-
-	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
-	created := now.Add(-24 * time.Hour)
-
-	rows := pgxmock.NewRows(baseCols()).
-		AddRow("nginx", "prod", "apps/v1.Deployment", "cluster-a", created, now, nil, int64(1))
-
-	policy := &access.Policy{
-		AllowedNamespaces: []string{"prod", "staging"},
-		AllowedClusters:   []string{"cluster-a"},
-	}
-
-	// resource_kind + allowed_namespaces + allowed_clusters + limit = 4
-	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("apps/v1.Deployment", []string{"prod", "staging"}, []string{"cluster-a"}, 51).
-		WillReturnRows(rows)
-
-	params := ListParams{
-		ResourceKind: "apps/v1.Deployment",
-		Limit:        50,
-	}
-
-	result, err := ListResources(context.Background(), mock, params, policy)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(result.Items) != 1 {
-		t.Fatalf("expected 1 item, got %d", len(result.Items))
-	}
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
-	}
-}

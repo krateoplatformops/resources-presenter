@@ -55,7 +55,7 @@ func BenchmarkBuildListQuery_Minimal(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		buildListQuery(p, nil)
+		buildListQuery(p)
 	}
 }
 
@@ -79,7 +79,7 @@ func BenchmarkBuildListQuery_AllFilters(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		buildListQuery(p, nil)
+		buildListQuery(p)
 	}
 }
 
@@ -217,7 +217,7 @@ func benchmarkListResources(b *testing.B, rowCount int, raw bool) {
 
 		b.StartTimer()
 
-		ListResources(context.Background(), mock, params, nil)
+		ListResources(context.Background(), mock, params)
 
 		b.StopTimer()
 		mock.Close()

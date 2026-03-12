@@ -1,14 +1,16 @@
+{{- if .Values.serviceAccount.create -}}
+{{- $authnNS := .Values.config.AUTHN_NS | default .Release.Namespace }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "resources-presenter.fullname" . }}-resources
-  namespace: {{ .Release.Namespace }}
+  name: {{ include "resources-presenter.fullname" . }}-secrets
+  namespace: {{ $authnNS }}
   labels:
     {{- include "resources-presenter.labels" . | nindent 4 }}
 rules:
+  # Required by use.UserConfig middleware to load {username}-clientconfig
+  # Secrets from the AUTHN_NS namespace for JWT-authenticated users.
   - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["*"]
-    resources: ["*"]
+    resources: ["secrets"]
     verbs: ["get"]
+{{- end }}
