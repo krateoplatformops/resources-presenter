@@ -21,7 +21,7 @@ func EncodeCursor(c *ResourcesCursor) EncodedCursor {
 		return ""
 	}
 	data, _ := json.Marshal(c)
-	return EncodedCursor(base64.StdEncoding.EncodeToString(data))
+	return EncodedCursor(base64.RawURLEncoding.EncodeToString(data))
 }
 
 // DecodeCursor decodes a base64 string into ResourcesCursor.
@@ -29,7 +29,7 @@ func DecodeCursor(s EncodedCursor) (*ResourcesCursor, error) {
 	if s == "" {
 		return nil, nil
 	}
-	data, err := base64.StdEncoding.DecodeString(string(s))
+	data, err := base64.RawURLEncoding.DecodeString(string(s))
 	if err != nil {
 		return nil, err
 	}

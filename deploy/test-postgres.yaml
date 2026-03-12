@@ -1,0 +1,231 @@
+# deploy/test-postgres.yaml — Ephemeral PostgreSQL for E2E testing in kind.
+#
+# Usage:
+#   kubectl apply -f deploy/test-postgres.yaml
+#   kubectl wait --for=condition=ready pod -l app=postgres -n krateo-system --timeout=120s
+#
+# This is NOT for production. No PVC, no backups, no HA.
+# Data is lost when the pod is deleted.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: krateo-system
+data:
+  # 01-schema.sql runs first (files are sorted alphabetically).
+  01-schema.sql: |
+    -- ============================================================
+    -- Table: krateo_resources (current state of Kubernetes resources)
+    -- ============================================================
+
+    CREATE TABLE IF NOT EXISTS krateo_resources (
+        -- Timestamps for ingestion and updates
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+        deleted_at        TIMESTAMPTZ NULL,
+
+        -- Stable row id for deterministic keyset pagination
+        id                BIGINT GENERATED ALWAYS AS IDENTITY,
+
+        -- Cluster / object identity
+        cluster_name      TEXT NOT NULL,
+        uid               TEXT NOT NULL,
+        global_uid        TEXT NOT NULL UNIQUE, -- cluster_name:uid
+
+        namespace         TEXT NOT NULL,
+
+        -- Kubernetes API identifiers (GVR decomposition)
+        resource_group    TEXT NOT NULL,       -- e.g. apps (empty for core)
+        resource_version  TEXT NOT NULL,       -- e.g. v1
+        resource_kind     TEXT NOT NULL,       -- e.g. Deployment
+        resource_plural   TEXT NOT NULL,
+        resource_name     TEXT NOT NULL,
+
+        -- Optional domain identifier
+        composition_id    UUID NULL,
+
+        -- Full Kubernetes object
+        raw               JSONB NOT NULL,
+
+        PRIMARY KEY (id)
+    );
+
+    -- Fast keyset pagination by GVR (group + version + kind).
+    CREATE INDEX IF NOT EXISTS idx_krateo_resources_gvr_page
+    ON krateo_resources (resource_group, resource_version, resource_kind, updated_at DESC, id DESC)
+    WHERE deleted_at IS NULL;
+
+    -- Fast direct lookup for a full Kubernetes object.
+    CREATE INDEX IF NOT EXISTS idx_krateo_resources_obj
+    ON krateo_resources (cluster_name, namespace, resource_group, resource_version, resource_kind, resource_name)
+    WHERE deleted_at IS NULL;
+
+    -- Fast filters and GROUP BY by resource_plural.
+    CREATE INDEX IF NOT EXISTS idx_krateo_resources_plural
+    ON krateo_resources (resource_plural)
+    WHERE deleted_at IS NULL;
+
+    -- Keyset pagination when listing by resource_plural.
+    CREATE INDEX IF NOT EXISTS idx_krateo_resources_plural_page
+    ON krateo_resources (resource_plural, updated_at DESC, id DESC)
+    WHERE deleted_at IS NULL;
+
+    -- Fast lookup by GVR inside cluster and namespace.
+    CREATE INDEX IF NOT EXISTS idx_krateo_resources_cluster_ns_gvr_plural
+    ON krateo_resources (cluster_name, namespace, resource_group, resource_version, resource_plural)
+    WHERE deleted_at IS NULL;
+
+    -- Fast lookup by resource_plural inside cluster and namespace.
+    CREATE INDEX IF NOT EXISTS idx_krateo_resources_cluster_ns_plural
+    ON krateo_resources (cluster_name, namespace, resource_plural)
+    WHERE deleted_at IS NULL;
+
+    -- Optional composition-based listing for active rows.
+    CREATE INDEX IF NOT EXISTS idx_krateo_resources_composition
+    ON krateo_resources (composition_id, updated_at DESC, id DESC)
+    WHERE composition_id IS NOT NULL;
+
+    -- Phase 2: label search on metadata.labels only (avoids a full raw JSONB index).
+    CREATE INDEX IF NOT EXISTS idx_krateo_resources_labels
+    ON krateo_resources
+    USING GIN ((raw->'metadata'->'labels'))
+    WHERE deleted_at IS NULL;
+
+    -- Cleanup support index for hard-delete jobs on soft-deleted rows.
+    CREATE INDEX IF NOT EXISTS idx_krateo_resources_deleted_at
+    ON krateo_resources (deleted_at)
+    WHERE deleted_at IS NOT NULL;
+
+  # 02-seed.sql runs second — inserts 500 Panel resources for testing.
+  02-seed.sql: |
+    DO $$
+    DECLARE
+      clusters   TEXT[] := ARRAY['prod-eu', 'prod-us', 'staging', 'dev'];
+      namespaces TEXT[] := ARRAY['krateo-system', 'demo-system', 'ns-1', 'ns-2'];
+      titles     TEXT[] := ARRAY['Blueprints', 'Deployments', 'Costs', 'Pipelines', 'Alerts', 'Metrics', 'Logs', 'Clusters', 'Users', 'Quotas'];
+      sections   TEXT[] := ARRAY['dashboard', 'overview', 'admin'];
+      c TEXT; ns TEXT; title TEXT; sec TEXT;
+      i INT := 1;
+      uid_val TEXT;
+      name_val TEXT;
+      raw_val JSONB;
+    BEGIN
+      FOR rep IN 1..7 LOOP                                  -- repeat to reach 500
+        FOREACH c IN ARRAY clusters LOOP
+          FOREACH ns IN ARRAY namespaces[1:2] LOOP          -- 2 namespaces per cluster
+            FOR ti IN 1..array_length(titles, 1) LOOP
+              IF i > 500 THEN RETURN; END IF;
+            title  := titles[ti];
+            sec    := sections[1 + (i % array_length(sections, 1))];
+            name_val := sec || '-' || lower(replace(title, ' ', '-')) || '-panel-' || i;
+            uid_val  := 'uid-' || lpad(i::TEXT, 4, '0');
+
+            raw_val := jsonb_build_object(
+              'apiVersion', 'widgets.templates.krateo.io/v1beta1',
+              'kind',       'Panel',
+              'metadata',   jsonb_build_object(
+                'name',      name_val,
+                'namespace', ns,
+                'labels',    jsonb_build_object('app.kubernetes.io/part-of', sec),
+                'annotations', jsonb_build_object('krateo.io/verbose', (i % 2 = 0)::TEXT)
+              ),
+              'spec', jsonb_build_object(
+                'widgetData', jsonb_build_object(
+                  'title',   title,
+                  'actions', '{}'::jsonb,
+                  'items',   jsonb_build_array(
+                    jsonb_build_object('resourceRefId', name_val || '-row')
+                  )
+                ),
+                'resourcesRefs', jsonb_build_object(
+                  'items', jsonb_build_array(
+                    jsonb_build_object(
+                      'id',         name_val || '-row',
+                      'apiVersion', 'widgets.templates.krateo.io/v1beta1',
+                      'name',       name_val || '-row',
+                      'namespace',  ns,
+                      'resource',   'rows',
+                      'verb',       'GET'
+                    )
+                  )
+                )
+              )
+            );
+
+            INSERT INTO krateo_resources
+              (updated_at, cluster_name, uid, global_uid, namespace,
+              resource_group, resource_version, resource_kind, resource_plural,
+              resource_name, raw)
+            VALUES
+              (now() - (i || ' minutes')::INTERVAL,
+              c, uid_val, c || ':' || uid_val, ns,
+              'widgets.templates.krateo.io', 'v1beta1', 'Panel', 'panels',
+              name_val, raw_val);
+
+              i := i + 1;
+            END LOOP;
+          END LOOP;
+        END LOOP;
+      END LOOP;
+    END $$;
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: krateo-system
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - name: POSTGRES_USER
+              value: "krateo"
+            - name: POSTGRES_PASSWORD
+              value: "krateo"
+            - name: POSTGRES_DB
+              value: "krateo"
+          ports:
+            - containerPort: 5432
+              name: postgres
+          volumeMounts:
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "krateo"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgres-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: krateo-system
+  labels:
+    app: postgres
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    app: postgres

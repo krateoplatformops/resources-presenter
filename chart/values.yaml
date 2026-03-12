@@ -159,3 +159,13 @@ config:
 
   # Database name
   # DB_NAME: ""
+
+  # HMAC signing key for JWT validation (HS256).
+  # Must match the key used by krateoctl to generate user tokens.
+  # SIGN_KEY: ""
+
+  # Kubernetes namespace where {username}-clientconfig Secrets are stored.
+  # Used by use.UserConfig middleware to load user credentials for RBAC.
+  # A namespaced Role is created in this namespace granting the ServiceAccount
+  # read access to Secrets. Falls back to Release.Namespace if not set.
+  # AUTHN_NS: "krateo-system"

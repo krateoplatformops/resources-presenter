@@ -18,6 +18,7 @@ import (
 	"github.com/krateoplatformops/plumbing/server/use/cors"
 	"github.com/krateoplatformops/resources-presenter/internal/config"
 	"github.com/krateoplatformops/resources-presenter/internal/handlers"
+	"github.com/krateoplatformops/resources-presenter/internal/rbac"
 )
 
 func main() {
@@ -39,10 +40,11 @@ func main() {
 
 	// HTTP server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/resources", handlers.ResourcesHandler(pool, cfg.Log))
 	probes.Register(mux, cfg.Log, pool, time.Second)
 
 	chain := use.NewChain(
+		use.TraceId(),
+		use.Access(cfg.Log),
 		use.CORS(cors.Options{
 			AllowedOrigins: []string{"*"},
 			AllowedMethods: []string{"GET", "POST", "OPTIONS"},
@@ -59,9 +61,16 @@ func main() {
 		}),
 	)
 
+	// Authenticated routes: append use.UserConfig so the handler can extract
+	// the user's Endpoint from context for RBAC checks.
+	authChain := chain.Append(use.UserConfig(cfg.SigningKey, cfg.AuthnNS))
+
+	auth := rbac.RbacAuthorizer{}
+	mux.Handle("/resources", authChain.Then(handlers.ResourcesHandler(pool, cfg.Log, auth)))
+
 	server := &http.Server{
 		Addr:         ":" + strconv.Itoa(cfg.Port),
-		Handler:      chain.Then(mux),
+		Handler:      mux,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

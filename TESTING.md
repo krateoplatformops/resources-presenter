@@ -1,207 +1,438 @@
 # Testing Guide
 
-## Test dependencies
+## 1. Unit Tests
 
-| Dependency | Purpose |
-|---|---|
-| `github.com/pashagolub/pgxmock/v4` | **Unit tests** — mocks the `pgx` database interface so SQL-layer tests (`internal/sql/resources_test.go`) run instantly without a real database. Verifies query construction, parameter binding, cursor encoding, and row scanning in isolation. |
-| `github.com/testcontainers/testcontainers-go` | **Integration tests** — spins up a real PostgreSQL container via Docker at test time. Manages container lifecycle (start, wait-for-ready, stop). |
-| `github.com/testcontainers/testcontainers-go/modules/postgres` | **Postgres module** for testcontainers — provides Postgres-specific helpers (username, password, database name, readiness detection via log parsing). Used in `internal/handlers/resources_test.go`. |
-
-**In short**: `pgxmock` = fast, no-Docker unit tests for the SQL layer. `testcontainers` = real-DB integration tests for the HTTP handler layer. Both are test-only dependencies (`require` block in `go.mod`).
-
-## Running tests
-
-All tests require Docker to be running (testcontainers starts a Postgres container automatically).
+Unit tests use `pgxmock` to mock the `pgx` database interface. No Docker, no Kubernetes — they run instantly.
 
 ```bash
-# Unit tests only (SQL layer, fast, uses pgxmock)
-go test ./internal/sql/ -cover -v
+# SQL layer (query construction, cursor encoding, row scanning, filter combinations)
+go test ./internal/sql/ -v -cover
 
-# Integration tests only (handler layer, uses testcontainers)
-go test ./internal/handlers/ -cover -v
+# Config parsing
+go test ./internal/config/ -v -cover
 
-# Run all tests
-go test ./... -cover
+# All unit tests
+go test ./internal/sql/ ./internal/config/ -v -cover
 ```
 
-## Local manual testing (curl)
+## 2. Integration Tests
 
-To test the service manually with curl, you need a running PostgreSQL instance.
+Integration tests use `testcontainers-go` to spin up a real PostgreSQL container. They test the HTTP handler layer end-to-end with a real database, but use a **mock authorizer** (no Kubernetes needed).
 
-### 1. Start Postgres
+**Requires:** Docker running.
 
 ```bash
-docker run -d --name krateo-pg \
-  -e POSTGRES_USER=krateo \
-  -e POSTGRES_PASSWORD=krateo \
-  -e POSTGRES_DB=krateo \
-  -p 5432:5432 \
-  postgres:18
+# Handler layer (pagination, filtering, RBAC mock, POST, validation)
+go test ./internal/handlers/ -v -cover
+
+# All tests (unit + integration)
+go test ./... -v -cover
 ```
 
-### 2. Create the schema
+## 3. In-Cluster E2E Testing (kind)
+
+This is the only way to test the full authentication and RBAC flow, because:
+- `use.UserConfig` middleware reads `{username}-clientconfig` Secrets from Kubernetes
+- `rbac.UserCan()` creates `SelfSubjectAccessReview` resources against the K8s API
+- Both require in-cluster config (`/var/run/secrets/kubernetes.io/serviceaccount/token`)
+
+### 3.1 Prerequisites
+
+| Tool | Purpose |
+|---|---|---|
+| `docker` | Container runtime |
+| `kind` | Local K8s cluster in Docker |
+| `kubectl` | K8s CLI |
+| `helm` | Chart templating |
+| `krateoctl` | User creation (JWT + clientconfig Secret) |
+
+### 3.2 Create the kind cluster
 
 ```bash
-docker exec -i krateo-pg psql -U krateo -d krateo < assets/resources.schema.sql
+kind create cluster --name krateo-e2e
+
+# Check cluster is running and kubectl context is set
+kubectl cluster-info --context kind-krateo-e2e
+
+# Create namespace for testing
+kubectl create ns krateo-system
 ```
 
-### 3. Seed sample data
+### 3.3 Deploy PostgreSQL
 
-Generates 500 Panel resources across different clusters, namespaces, and dashboard themes:
+Deploys an ephemeral Postgres pod with the schema and 500 seed Panel resources pre-loaded via init scripts. No PVC — data is lost when the pod is deleted.
 
 ```bash
-docker exec -i krateo-pg psql -U krateo -d krateo < assets/seed_data.sql
+kubectl apply -f deploy/test-postgres.yaml
+kubectl wait --for=condition=ready pod -l app=postgres -n krateo-system --timeout=240s
 ```
 
-Verify:
+Verify the database is populated:
+
 ```bash
-docker exec -i krateo-pg psql -U krateo -d krateo -c \
-  "SELECT cluster_name, namespace, resource_kind, resource_name FROM krateo_resources ORDER BY updated_at DESC;"
+kubectl exec -n krateo-system deploy/postgres -- \
+  psql -U krateo -d krateo -c "SELECT count(*) FROM krateo_resources;"
 ```
 
-### 4. Run the service
+Expected output: `500`.
 
 ```bash
-DB_USER=krateo DB_PASS=krateo DB_HOST=localhost DB_NAME=krateo \
-  DB_PARAMS="sslmode=disable" DEBUG=true \
-  go run .
+kubectl exec -n krateo-system deploy/postgres -- \
+  psql -U krateo -d krateo -c "SELECT cluster_name, namespace, resource_group, resource_version, resource_kind, resource_plural, resource_name FROM krateo_resources LIMIT 20;"
 ```
 
-### 5. Test with curl
+Expected output: a sample of the seeded resources.
 
-#### GET examples
+
+### 3.4 Build and load the service image
 
 ```bash
-# List panels
-curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel' | jq
+docker build -t resources-presenter:dev .
+kind load docker-image resources-presenter:dev --name krateo-e2e
+```
 
-# List panels with full raw objects
-curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&raw=true' | jq
+### 3.5 Deploy resources-presenter
 
-# Filter by namespace
-curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&namespace=krateo-system' | jq
+Render the Helm chart with `values.e2e.yaml` (which points to the local Docker image and has test-specific config) and apply it to the cluster:
+```bash
+helm template resources-presenter ./chart \
+  -n krateo-system \
+  -f ./chart/values.e2e.yaml | kubectl apply -f -
+```
 
-# Filter by cluster + namespace
-curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&cluster=prod-eu&namespace=krateo-system' | jq
+Wait for the pod to be ready:
 
-# Search by name (case-insensitive, partial match)
-curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&name=blueprints' | jq
+```bash
+kubectl wait --for=condition=ready pod \
+  -l app.kubernetes.io/name=resources-presenter \
+  -n krateo-system --timeout=120s
+```
 
-# Filter by labels
-curl --get 'http://localhost:8080/resources' \
+Verify readiness:
+
+```bash
+kubectl logs deploy/resources-presenter -n krateo-system
+```
+
+You should see:
+```sh
+[23:02:41.997] DEBUG: database connection URL {
+  "cfg.DbURL": "postgres://krateo:krateo@postgres.krateo-system.svc.cluster.local:5432/krateo?connect_timeout=5\u0026sslmode=disable",
+  "service": "resources-presenter"
+}
+[23:02:42.163] INFO: PostgreSQL is ready {
+  "service": "resources-presenter"
+}
+[23:02:42.164] INFO: application is ready {
+  "service": "resources-presenter"
+}
+[23:02:42.164] INFO: starting HTTP server {
+  "port": 8080,
+  "service": "resources-presenter"
+}
+```
+
+**What the chart deploys:**
+- **Deployment** — resources-presenter pod with all env vars from `values.e2e.yaml`
+- **Service** — ClusterIP on port 8080
+- **ServiceAccount** — with `automountServiceAccountToken: true`
+- **ClusterRole** — permission to create `SelfSubjectAccessReview` (for RBAC checks)
+- **ClusterRoleBinding** — binds the ServiceAccount to the ClusterRole
+- **Role** (in `krateo-system`) — permission to read Secrets (for user clientconfig)
+- **RoleBinding** (in `krateo-system`) — binds the ServiceAccount to the Role
+
+### 3.6 Create a test user
+
+`krateoctl add-user` generates a signed JWT **and** creates a `{username}-clientconfig` Secret in Kubernetes with a client certificate for RBAC.
+
+```bash
+# The SIGN_KEY must match the one in values.e2e.yaml
+# NOTE: flags MUST come before the positional argument (username).
+TOKEN=$(krateoctl add-user \
+  -n krateo-system \
+  -k "e2e-test-sign-key" \
+  -g devs \
+  -d 24h \
+  e2euser)
+
+echo "TOKEN=$TOKEN"
+```
+
+What this does:
+1. Creates a JWT (HS256) signed with `e2e-test-sign-key`, containing claims `{username: "e2euser", groups: ["devs"]}`
+2. Generates a client certificate via CertificateSigningRequest (Organization=`devs`)
+3. Creates Secret `e2euser-clientconfig` in `krateo-system` with the client cert + key + cluster CA
+
+Verify the Secret was created:
+
+```bash
+kubectl get secret e2euser-clientconfig -n krateo-system
+```
+
+### 3.7 Grant the test user access to Panels
+
+The RBAC check (`SelfSubjectAccessReview`) verifies that the user has `get` permission on `panels` in `widgets.templates.krateo.io`. Create a Role + RoleBinding for the `devs` group:
+
+```bash
+kubectl apply -f deploy/test-user-rbac.yaml
+```
+
+This grants:
+- **Role** `e2e-test-user-panels` in `krateo-system` — `get`, `list` on `panels` in `widgets.templates.krateo.io`
+- **RoleBinding** — binds Group `devs` to the Role
+
+### 3.8 Test the endpoint
+
+Start port-forwarding:
+
+```bash
+kubectl port-forward svc/resources-presenter 8080:8080 -n krateo-system &
+PF_PID=$!
+```
+
+**Health probes** (no auth required):
+
+```bash
+curl -v -s http://localhost:8080/livez
+curl -v -s http://localhost:8080/readyz
+```
+
+**List Panels** (should return status code 200 with items):
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system' | jq
+```
+
+**List Panels with full raw objects:**
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&raw=true&limit=2' | jq
+```
+
+**Filter by cluster:**
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&cluster=prod-eu' | jq
+```
+
+**Search by name** (case-insensitive partial match):
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&name=blueprints' | jq
+```
+
+**Filter by labels:**
+
+```bash
+curl --get -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources' \
   --data-urlencode 'group=widgets.templates.krateo.io' \
   --data-urlencode 'version=v1beta1' \
-  --data-urlencode 'kind=Panel' \
+  --data-urlencode 'resource=panels' \
+  --data-urlencode 'namespace=krateo-system' \
   --data-urlencode 'labels={"app.kubernetes.io/part-of":"dashboard"}' | jq
-
-# Filter by time (resources updated after a given date)
-curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&since=2026-03-01T00:00:00Z' | jq
-
-# Pagination (page 1, then page 2)
-curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&limit=10' | jq
-# copy cursor from response, then:
-curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&limit=10&cursor=<CURSOR>' | jq
-
-# Missing required params (returns 400)
-curl -s 'http://localhost:8080/resources' | jq
-
-# Health probes
-curl -s http://localhost:8080/livez
-curl -s http://localhost:8080/readyz
 ```
 
-#### POST examples
+**Pagination:**
 
 ```bash
-# Basic query with filters
-curl -s -X POST http://localhost:8080/resources \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "group": "widgets.templates.krateo.io",
-    "version": "v1beta1",
-    "kind": "Panel",
-    "namespace": "krateo-system"
-  }' | jq
+# Page 1
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&limit=5' | jq
 
-# Multiple filters + raw
+# Copy the "cursor" value from the response, then:
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&limit=5&cursor=<CURSOR>' | jq
+```
+
+**POST with JSON body:**
+
+```bash
 curl -s -X POST http://localhost:8080/resources \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "group": "widgets.templates.krateo.io",
     "version": "v1beta1",
-    "kind": "Panel",
-    "cluster": "prod-eu",
+    "resource": "panels",
     "namespace": "krateo-system",
-    "name": "blueprints",
+    "cluster": "prod-eu",
     "raw": true,
-    "limit": 10
-  }' | jq
-
-# Filter by labels (note: labels is a JSON object, not a string)
-curl -s -X POST http://localhost:8080/resources \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "group": "widgets.templates.krateo.io",
-    "version": "v1beta1",
-    "kind": "Panel",
-    "labels": {"app.kubernetes.io/part-of": "dashboard"},
-    "limit": 50
-  }' | jq
-
-# Filter by time
-curl -s -X POST http://localhost:8080/resources \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "group": "widgets.templates.krateo.io",
-    "version": "v1beta1",
-    "kind": "Panel",
-    "since": "2026-03-01T00:00:00Z",
-    "limit": 100
-  }' | jq
-
-# Pagination via POST (page 1)
-curl -s -X POST http://localhost:8080/resources \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "group": "widgets.templates.krateo.io",
-    "version": "v1beta1",
-    "kind": "Panel",
-    "cluster": "prod-eu",
-    "limit": 10
-  }' | jq
-
-# Pagination via POST (page 2 — use cursor from page 1)
-curl -s -X POST http://localhost:8080/resources \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "group": "widgets.templates.krateo.io",
-    "version": "v1beta1",
-    "kind": "Panel",
-    "cluster": "prod-eu",
-    "limit": 10,
-    "cursor": "<CURSOR_FROM_PAGE_1>"
-  }' | jq
-
-# All filters combined
-curl -s -X POST http://localhost:8080/resources \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "group": "widgets.templates.krateo.io",
-    "version": "v1beta1",
-    "kind": "Panel",
-    "cluster": "prod-eu",
-    "namespace": "krateo-system",
-    "name": "blueprints",
-    "labels": {"app.kubernetes.io/part-of": "dashboard"},
-    "since": "2026-03-01T00:00:00Z",
-    "raw": true,
-    "limit": 50
+    "limit": 5
   }' | jq
 ```
 
-### 6. Cleanup
+**Expected error cases:**
 
 ```bash
-docker stop krateo-pg && docker rm krateo-pg
+# Missing namespace → 400
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels' | jq
+
+# Missing auth header → 401
+curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system' | jq
+
+# RBAC denied (namespace the user has no access to) → 403
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=demo-system' | jq
+
+# Namespace does not exist → 403 (due to the RBAC check, which is done before verifying namespace existence, better than 404 to avoid info leak about which namespaces exist)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=nonexistent' | jq
+```
+
+Stop port-forwarding:
+
+```bash
+kill $PF_PID
+```
+
+### 3.9 Teardown
+
+```bash
+kind delete cluster --name krateo-e2e
+```
+
+### 3.10 Quick reference (all commands)
+
+```bash
+# Full setup (copy-paste block)
+kind create cluster --name krateo-e2e
+kubectl apply -f deploy/test-postgres.yaml
+kubectl wait --for=condition=ready pod -l app=postgres -n krateo-system --timeout=120s
+docker build -t resources-presenter:dev .
+kind load docker-image resources-presenter:dev --name krateo-e2e
+helm template resources-presenter ./chart -n krateo-system -f ./chart/values.e2e.yaml | kubectl apply -f -
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=resources-presenter -n krateo-system --timeout=120s
+TOKEN=$(krateoctl add-user -n krateo-system -k "e2e-test-sign-key" -g devs -d 24h e2euser)
+kubectl apply -f deploy/test-user-rbac.yaml
+kubectl port-forward svc/resources-presenter 8080:8080 -n krateo-system &
+
+# Test
+curl -s http://localhost:8080/readyz | jq
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system' | jq
+
+# Teardown
+kind delete cluster --name krateo-e2e
+```
+
+---
+
+## 4. Benchmarks
+
+Benchmarks live in `internal/sql/bench_test.go` and measure the hot paths of the query pipeline.
+
+### What is benchmarked
+
+| Benchmark | What it measures |
+|---|---|
+| `BenchmarkCursorEncode` | Encoding a keyset cursor to base64 |
+| `BenchmarkCursorDecode` | Decoding a base64 cursor back to struct |
+| `BenchmarkCursorRoundtrip` | Full encode + decode cycle |
+| `BenchmarkBuildListQuery_Minimal` | SQL builder with required filters only (group, version, plural) |
+| `BenchmarkBuildListQuery_AllFilters` | SQL builder with all 7 filters + cursor active |
+| `BenchmarkEscapeLIKE` | Escaping LIKE special characters |
+| `BenchmarkJSONMarshal_10/100/1000` | Serializing result sets of varying sizes |
+| `BenchmarkJSONMarshal_1000_WithRaw` | Serializing 1000 items including raw JSONB |
+| `BenchmarkListResources_10/100/1000rows` | Full query + scan + pagination with pgxmock |
+| `BenchmarkListResources_1000rows_raw` | Same with raw JSONB included |
+
+### Running benchmarks
+
+```bash
+# Quick sanity check (1 iteration, fast)
+./scripts/bench.sh quick
+
+# Full run (6 iterations for statistical reliability, saves to benchmarks/)
+./scripts/bench.sh run
+
+# Full run with custom options
+./scripts/bench.sh run -count 10 -benchtime 2s
+
+# Manual (without script)
+go test ./internal/sql/ -bench=. -benchmem -count=6 -run='^$'
+
+# Run specific benchmark
+go test ./internal/sql/ -bench=BenchmarkListResources -benchmem -count=6 -run='^$'
+```
+
+### Saving and comparing results
+
+```bash
+# 1. Save a baseline (before making changes)
+./scripts/bench.sh baseline
+
+# 2. Make your code changes...
+
+# 3. Run benchmarks again
+./scripts/bench.sh run
+
+# 4. Compare against baseline
+./scripts/bench.sh compare
+```
+
+The `compare` command uses [benchstat](https://pkg.go.dev/golang.org/x/perf/cmd/benchstat):
+
+```bash
+go install golang.org/x/perf/cmd/benchstat@latest
+```
+
+### Reading benchmark output
+
+```
+BenchmarkListResources_100rows-8    7315    160107 ns/op    55023 B/op    1063 allocs/op
+```
+
+| Column | Meaning |
+|---|---|
+| `-8` | GOMAXPROCS (number of CPUs used) |
+| `7315` | Number of iterations the benchmark ran |
+| `160107 ns/op` | Nanoseconds per operation (~0.16ms) |
+| `55023 B/op` | Bytes allocated per operation |
+| `1063 allocs/op` | Heap allocations per operation |
+
+---
+
+## 5. Stress Tests
+
+Stress tests live in `internal/sql/stress_test.go` and verify correctness under extreme or edge-case conditions.
+
+### What is tested
+
+| Test | What it verifies |
+|---|---|
+| `TestListResources_MaxLimit` | Correct behavior at max limit (5000 rows, no next page) |
+| `TestListResources_MaxLimitWithNextPage` | Cursor is correctly set when 5001 rows exist |
+| `TestListResources_RawLargePayload` | Handling of ~50KB raw JSONB objects |
+| `TestListResources_ConcurrentAccess` | 50 goroutines querying simultaneously (race safety) |
+| `TestBuildListQuery_AllFilterCombinations` | All 64 combinations of 6 optional filters |
+| `TestEscapeLIKE` | LIKE special character escaping (`%`, `_`, `\`) |
+
+### Running stress tests
+
+```bash
+# All stress tests with race detector
+go test ./internal/sql/ -race -v
+
+# Concurrent test specifically
+go test ./internal/sql/ -run=TestListResources_Concurrent -race -v
+```
+
+---
+
+## 6. Running everything
+
+```bash
+# Unit + stress tests (no Docker, no K8s)
+go test ./internal/sql/ ./internal/config/ -race -cover -v
+
+# Unit + integration tests (Docker required)
+go test ./... -race -cover -v
+
+# E2E tests: follow section 3 above (kind cluster required)
 ```

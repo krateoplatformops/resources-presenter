@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/krateoplatformops/resources-presenter/internal/access"
 )
 
 // Querier abstracts the pgx query interface so it can be mocked in tests.
@@ -18,23 +17,26 @@ type Querier interface {
 
 // ListParams contains the parsed and validated query parameters for listing resources.
 type ListParams struct {
-	ResourceKind  string
-	Cluster       string
-	Namespace     string
-	CompositionID string // UUID as string; empty means no filter
-	Name          string // case-insensitive partial match (ILIKE %name%)
-	Labels        string // raw JSON string for JSONB containment (@>)
-	Since         *time.Time
-	Raw           bool
-	Limit         int
-	Cursor        EncodedCursor
+	ResourceGroup   string // e.g. "apps", "" for core
+	ResourceVersion string // e.g. "v1"
+	ResourcePlural  string // e.g. "deployments"
+	Cluster         string
+	Namespace       string
+	CompositionID   string // UUID as string; empty means no filter
+	Name            string // case-insensitive partial match (ILIKE %name%)
+	Labels          string // raw JSON string for JSONB containment (@>)
+	Since           *time.Time
+	Raw             bool
+	Limit           int
+	Cursor          EncodedCursor
 }
 
 // ResourceItem is the response DTO for a single resource.
 type ResourceItem struct {
 	Name          string    `json:"name"`
 	Namespace     string    `json:"namespace"`
-	APIVersion    string    `json:"apiVersion"`
+	Group         string    `json:"group"`
+	Version       string    `json:"version"`
 	Kind          string    `json:"kind"`
 	ClusterName   string    `json:"cluster_name"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -59,8 +61,8 @@ type rowCursor struct {
 
 // ListResources queries krateo_resources with the given filters, keyset pagination,
 // and access policy. It fetches limit+1 rows to determine if a next page exists.
-func ListResources(ctx context.Context, db Querier, p ListParams, policy *access.Policy) (*ListResult, error) {
-	query, args, err := buildListQuery(p, policy)
+func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, error) {
+	query, args, err := buildListQuery(p)
 	if err != nil {
 		return nil, fmt.Errorf("cursor: %w", err)
 	}
@@ -71,24 +73,28 @@ func ListResources(ctx context.Context, db Querier, p ListParams, policy *access
 	}
 	defer rows.Close()
 
-	var items []ResourceItem
-	var cursors []rowCursor
+	// Pre-allocate to avoid repeated growing for large result sets.
+	items := make([]ResourceItem, 0, p.Limit+1)
+	cursors := make([]rowCursor, 0, p.Limit+1)
 
 	for rows.Next() {
 		var (
-			resourceName  string
-			namespace     string
-			resourceKind  string
-			clusterName   string
-			createdAt     time.Time
-			updatedAt     time.Time
-			compositionID *string
-			id            int64
-			rawJSON       []byte
+			resourceName    string
+			namespace       string
+			resourceGroup   string
+			resourceVersion string
+			resourceKind    string
+			clusterName     string
+			createdAt       time.Time
+			updatedAt       time.Time
+			compositionID   *string
+			id              int64
+			rawJSON         []byte
 		)
 
 		scanDest := []any{
-			&resourceName, &namespace, &resourceKind,
+			&resourceName, &namespace,
+			&resourceGroup, &resourceVersion, &resourceKind,
 			&clusterName, &createdAt, &updatedAt, &compositionID,
 			&id,
 		}
@@ -100,13 +106,12 @@ func ListResources(ctx context.Context, db Querier, p ListParams, policy *access
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 
-		apiVersion, kind := splitResourceKind(resourceKind)
-
 		item := ResourceItem{
 			Name:          resourceName,
 			Namespace:     namespace,
-			APIVersion:    apiVersion,
-			Kind:          kind,
+			Group:         resourceGroup,
+			Version:       resourceVersion,
+			Kind:          resourceKind,
 			ClusterName:   clusterName,
 			CreatedAt:     createdAt,
 			UpdatedAt:     updatedAt,
@@ -150,11 +155,16 @@ func ListResources(ctx context.Context, db Querier, p ListParams, policy *access
 
 // buildListQuery constructs the SQL and args for listing resources
 // using the Builder from this package.
-func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) {
+func buildListQuery(p ListParams) (string, []any, error) {
 	b := NewBuilder()
 
-	// resource_kind is required
-	b.Where("resource_kind = ?", p.ResourceKind)
+	// GVR decomposition: group, version, plural are required filters.
+	b.Where("resource_group = ?", p.ResourceGroup)
+	b.Where("resource_version = ?", p.ResourceVersion)
+	b.Where("resource_plural = ?", p.ResourcePlural)
+
+	// Soft-delete filter: only return active rows.
+	b.WhereRaw("deleted_at IS NULL")
 
 	if p.Cluster != "" {
 		b.Where("cluster_name = ?", p.Cluster)
@@ -169,7 +179,7 @@ func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) 
 	}
 
 	if p.Name != "" {
-		b.Where("resource_name ILIKE ?", "%"+p.Name+"%")
+		b.Where("resource_name ILIKE ?", "%"+escapeLIKE(p.Name)+"%")
 	}
 
 	if p.Labels != "" {
@@ -178,20 +188,6 @@ func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) 
 
 	if p.Since != nil {
 		b.Where("updated_at >= ?", *p.Since)
-	}
-
-	// TODO(auth): when policy is non-nil, add access control filters here.
-	// NOTE: The ANY(?) clauses below rely on pgx automatically encoding []string
-	// as a PostgreSQL array parameter. If the database driver is ever changed, this
-	// implicit conversion may break. The positional parameter ($N) receives a Go
-	// slice which pgx serializes as '{val1,val2,...}'.
-	if policy != nil {
-		if len(policy.AllowedNamespaces) > 0 {
-			b.Where("namespace = ANY(?)", policy.AllowedNamespaces)
-		}
-		if len(policy.AllowedClusters) > 0 {
-			b.Where("cluster_name = ANY(?)", policy.AllowedClusters)
-		}
 	}
 
 	// Keyset pagination cursor
@@ -209,7 +205,7 @@ func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) 
 	b.Limit(p.Limit + 1)
 
 	// Columns
-	cols := "resource_name, namespace, resource_kind, cluster_name, created_at, updated_at, composition_id, id"
+	cols := "resource_name, namespace, resource_group, resource_version, resource_kind, cluster_name, created_at, updated_at, composition_id, id"
 	if p.Raw {
 		cols += ", raw"
 	}
@@ -219,14 +215,8 @@ func buildListQuery(p ListParams, policy *access.Policy) (string, []any, error) 
 	return query, args, nil
 }
 
-// splitResourceKind splits "apiVersion.Kind" into its two parts.
-// The DB stores resource_kind as e.g. "composition.krateo.io/v1-2-2.GithubScaffoldingWithCompositionPage".
-// We use the last dot as the separator because the apiVersion portion can also contain dots.
-// For example, "apps/v1.Deployment" -> ("apps/v1", "Deployment").
-func splitResourceKind(rk string) (apiVersion, kind string) {
-	idx := strings.LastIndex(rk, ".")
-	if idx < 0 {
-		return "", rk
-	}
-	return rk[:idx], rk[idx+1:]
+// escapeLIKE escapes PostgreSQL LIKE/ILIKE special characters (%, _, \).
+func escapeLIKE(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }

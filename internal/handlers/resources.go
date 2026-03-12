@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	xcontext "github.com/krateoplatformops/plumbing/context"
 	"github.com/krateoplatformops/plumbing/http/response"
-	"github.com/krateoplatformops/resources-presenter/internal/access"
 	"github.com/krateoplatformops/resources-presenter/internal/sql"
 )
 
@@ -26,34 +26,46 @@ const (
 // uuidRegex validates UUID format (RFC 4122).
 var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
+// Authorizer checks whether the current user is allowed to GET a specific
+// resource type in a given namespace.
+type Authorizer interface {
+	CanGet(ctx context.Context, group, resource, namespace string) bool
+}
+
 // ResourcesHandler returns an HTTP handler for GET/POST /resources.
-// The resource kind is identified by query parameters: group, version, kind.
-// These are combined into the DB format: group/version.Kind
+// The resource type is identified by query parameters: group, version, resource (plural).
+//   - group    → API group (e.g. "apps", "widgets.templates.krateo.io")
+//   - version  → API version (e.g. "v1", "v1beta1")
+//   - resource → K8s plural resource name (e.g. "panels", "deployments")
 //
 // GET uses query parameters; POST uses a JSON body with the same fields.
 //
 // Design decision: an empty result set returns 200 with an empty items array,
 // not 404. This is consistent with Kubernetes LIST semantics — the resource kind
 // is valid, there are just no instances matching the filters.
-func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
+func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		totalStart := time.Now()
 
+		ctx := xcontext.BuildContext(r.Context())
+		traceId := xcontext.TraceId(ctx, false)
+
 		// Per-request state for the deferred log.
 		var (
-			resourceKind  string
+			gvr           string
 			statusCode    int
 			rowsReturned  int
 			parseDuration time.Duration
+			rbacDuration  time.Duration
 			queryDuration time.Duration
 			serDuration   time.Duration
 			queryErr      error
 		)
 
-		// Every request gets logged — successes and errors alike.
+		// Every request gets logged in detail, then there is also the higher-level access log due to the middleware.
 		defer func() {
 			totalDuration := time.Since(totalStart)
-			lvl := slog.LevelInfo
+			lvl := slog.LevelDebug
 			if statusCode >= 500 {
 				lvl = slog.LevelError
 			} else if statusCode >= 400 {
@@ -63,14 +75,16 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
 			attrs := []slog.Attr{
 				slog.String("handler", "resources"),
 				slog.String("method", r.Method),
-				slog.String("resource_kind", resourceKind),
+				slog.String("gvr", gvr),
+				slog.String("trace_id", traceId),
 				slog.Int("status_code", statusCode),
 				slog.Int("rows_returned", rowsReturned),
 				slog.Group("duration_ms",
 					slog.Float64("1_parse", float64(parseDuration.Microseconds())/1000.0),
-					slog.Float64("2_query", float64(queryDuration.Microseconds())/1000.0),
-					slog.Float64("3_serialize", float64(serDuration.Microseconds())/1000.0),
-					slog.Float64("4_total", float64(totalDuration.Microseconds())/1000.0),
+					slog.Float64("2_rbac", float64(rbacDuration.Microseconds())/1000.0),
+					slog.Float64("3_query", float64(queryDuration.Microseconds())/1000.0),
+					slog.Float64("4_serialize", float64(serDuration.Microseconds())/1000.0),
+					slog.Float64("5_total", float64(totalDuration.Microseconds())/1000.0),
 				),
 			}
 			if queryErr != nil {
@@ -91,10 +105,10 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
 		// --- Phase 1: Request parsing / validation ---
 		parseStart := time.Now()
 
-		params, policy, parseErr := parseRequest(r)
+		params, parseErr := parseRequest(r)
 		parseDuration = time.Since(parseStart)
-		if params.ResourceKind != "" {
-			resourceKind = params.ResourceKind
+		if params.ResourcePlural != "" {
+			gvr = params.ResourceGroup + "/" + params.ResourceVersion + "." + params.ResourcePlural
 		}
 
 		if parseErr != nil {
@@ -103,13 +117,24 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		// --- Phase 2: DB query execution ---
+		// --- Phase 2: RBAC authorization ---
+		rbacStart := time.Now()
+
+		if !auth.CanGet(r.Context(), params.ResourceGroup, params.ResourcePlural, params.Namespace) {
+			rbacDuration = time.Since(rbacStart)
+			statusCode = http.StatusForbidden
+			response.Encode(w, response.New(http.StatusForbidden, fmt.Errorf("forbidden: insufficient permissions")))
+			return
+		}
+		rbacDuration = time.Since(rbacStart)
+
+		// --- Phase 3: DB query execution ---
 		queryStart := time.Now()
 
 		queryCtx, queryCancel := context.WithTimeout(r.Context(), queryTimeout)
 		defer queryCancel()
 
-		result, err := sql.ListResources(queryCtx, db, params, policy)
+		result, err := sql.ListResources(queryCtx, db, params.ListParams)
 		queryDuration = time.Since(queryStart)
 		if err != nil {
 			queryErr = err
@@ -118,7 +143,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		// --- Phase 3: Response serialization ---
+		// --- Phase 4: Response serialization ---
 		// Pre-marshal to a buffer to avoid committing a 200 status with a
 		// truncated body if serialization fails partway through.
 		serializeStart := time.Now()
@@ -136,7 +161,9 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger) http.HandlerFunc {
 		rowsReturned = len(result.Items)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write(data)
+		if _, err := w.Write(data); err != nil {
+			log.Debug("client write error", slog.Any("err", err))
+		}
 
 		serDuration = time.Since(serializeStart)
 	}
@@ -148,16 +175,17 @@ type handlerError struct {
 	msg    string
 }
 
-// buildResourceKind constructs the DB resource_kind from group, version, and kind.
-// Format: "group/version.Kind" (e.g. "widgets.templates.krateo.io/v1beta1.Panel").
-func buildResourceKind(group, version, kind string) string {
-	return group + "/" + version + "." + kind
+// handlerParams wraps sql.ListParams.
+// Group and plural resource name for RBAC are accessed via
+// ListParams.ResourceGroup and ListParams.ResourcePlural.
+type handlerParams struct {
+	sql.ListParams
 }
 
 // parseRequest validates the request and extracts params from query string (GET) or JSON body (POST).
-// The resource kind is identified by required query/body params: group, version, kind.
-// Returns (params, policy, nil) on success, or (zero, nil, *handlerError) on failure.
-func parseRequest(r *http.Request) (sql.ListParams, *access.Policy, *handlerError) {
+// The resource type is identified by required query/body params: group, version, resource (plural).
+// Namespace is required for RBAC authorization.
+func parseRequest(r *http.Request) (handlerParams, *handlerError) {
 	var (
 		params sql.ListParams
 		err    error
@@ -171,30 +199,33 @@ func parseRequest(r *http.Request) (sql.ListParams, *access.Policy, *handlerErro
 	}
 
 	if err != nil {
-		return sql.ListParams{}, nil, &handlerError{
+		return handlerParams{}, &handlerError{
 			status: http.StatusBadRequest,
 			msg:    fmt.Sprintf("invalid parameters: %v", err),
 		}
 	}
 
-	// TODO(auth): populate from verified JWT/session claims.
-	policy := access.PolicyFromRequest(r)
+	// Namespace is required for RBAC authorization. At least for now
+	if params.Namespace == "" {
+		return handlerParams{ListParams: params}, &handlerError{
+			status: http.StatusBadRequest,
+			msg:    "query parameter 'namespace' is required",
+		}
+	}
 
-	return params, policy, nil
+	return handlerParams{ListParams: params}, nil
 }
 
 func parseListParams(r *http.Request) (sql.ListParams, error) {
 	q := r.URL.Query()
 
-	// group, version, kind are required to identify the resource type.
+	// group, version, resource (plural) are required to identify the resource type.
 	group := q.Get("group")
 	version := q.Get("version")
-	kind := q.Get("kind")
-	if group == "" || version == "" || kind == "" {
-		return sql.ListParams{}, fmt.Errorf("query parameters 'group', 'version', and 'kind' are all required")
+	resource := q.Get("resource")
+	if group == "" || version == "" || resource == "" {
+		return sql.ListParams{}, fmt.Errorf("query parameters 'group', 'version', and 'resource' are all required")
 	}
-
-	resourceKind := buildResourceKind(group, version, kind)
 
 	limit, err := parseLimit(q.Get("limit"))
 	if err != nil {
@@ -231,16 +262,18 @@ func parseListParams(r *http.Request) (sql.ListParams, error) {
 	}
 
 	p := sql.ListParams{
-		ResourceKind:  resourceKind,
-		Cluster:       q.Get("cluster"),
-		Namespace:     q.Get("namespace"),
-		CompositionID: compositionID,
-		Name:          q.Get("name"),
-		Labels:        labels,
-		Since:         since,
-		Raw:           q.Get("raw") == "true",
-		Limit:         limit,
-		Cursor:        cursor,
+		ResourceGroup:   group,
+		ResourceVersion: version,
+		ResourcePlural:  resource,
+		Cluster:         q.Get("cluster"),
+		Namespace:       q.Get("namespace"),
+		CompositionID:   compositionID,
+		Name:            q.Get("name"),
+		Labels:          labels,
+		Since:           since,
+		Raw:             q.Get("raw") == "true",
+		Limit:           limit,
+		Cursor:          cursor,
 	}
 
 	return p, nil
@@ -250,7 +283,7 @@ func parseListParams(r *http.Request) (sql.ListParams, error) {
 type resourcesJSONPayload struct {
 	Group         string         `json:"group"`
 	Version       string         `json:"version"`
-	Kind          string         `json:"kind"`
+	Resource      string         `json:"resource"`
 	Cluster       string         `json:"cluster"`
 	Namespace     string         `json:"namespace"`
 	CompositionID string         `json:"composition_id"`
@@ -282,12 +315,10 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 		return sql.ListParams{}, fmt.Errorf("invalid JSON body: multiple JSON values")
 	}
 
-	// group, version, kind are required.
-	if payload.Group == "" || payload.Version == "" || payload.Kind == "" {
-		return sql.ListParams{}, fmt.Errorf("fields 'group', 'version', and 'kind' are all required")
+	// group, version, resource (plural) are required.
+	if payload.Group == "" || payload.Version == "" || payload.Resource == "" {
+		return sql.ListParams{}, fmt.Errorf("fields 'group', 'version', and 'resource' are all required")
 	}
-
-	resourceKind := buildResourceKind(payload.Group, payload.Version, payload.Kind)
 
 	limit := defaultLimit
 	if payload.Limit != nil {
@@ -324,16 +355,18 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 	}
 
 	p := sql.ListParams{
-		ResourceKind:  resourceKind,
-		Cluster:       payload.Cluster,
-		Namespace:     payload.Namespace,
-		CompositionID: payload.CompositionID,
-		Name:          payload.Name,
-		Labels:        labels,
-		Since:         payload.Since,
-		Raw:           raw,
-		Limit:         limit,
-		Cursor:        cursor,
+		ResourceGroup:   payload.Group,
+		ResourceVersion: payload.Version,
+		ResourcePlural:  payload.Resource,
+		Cluster:         payload.Cluster,
+		Namespace:       payload.Namespace,
+		CompositionID:   payload.CompositionID,
+		Name:            payload.Name,
+		Labels:          labels,
+		Since:           payload.Since,
+		Raw:             raw,
+		Limit:           limit,
+		Cursor:          cursor,
 	}
 
 	return p, nil

@@ -1,0 +1,14 @@
+{{- if .Values.serviceAccount.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "resources-presenter.fullname" . }}
+  labels:
+    {{- include "resources-presenter.labels" . | nindent 4 }}
+rules:
+  # Required by plumbing/kubeutil/rbac.UserCan() to perform RBAC checks
+  # via SelfSubjectAccessReview against the Kubernetes API.
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["selfsubjectaccessreviews"]
+    verbs: ["create"]
+{{- end }}

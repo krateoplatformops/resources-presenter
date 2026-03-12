@@ -1,10 +1,8 @@
 {{- if .Values.serviceAccount.create -}}
-{{- $authnNS := .Values.config.AUTHN_NS | default .Release.Namespace }}
 apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+kind: ClusterRoleBinding
 metadata:
-  name: {{ include "resources-presenter.fullname" . }}-secrets
-  namespace: {{ $authnNS }}
+  name: {{ include "resources-presenter.fullname" . }}
   labels:
     {{- include "resources-presenter.labels" . | nindent 4 }}
 subjects:
@@ -12,7 +10,7 @@ subjects:
     name: {{ include "resources-presenter.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 roleRef:
-  kind: Role
-  name: {{ include "resources-presenter.fullname" . }}-secrets
+  kind: ClusterRole
+  name: {{ include "resources-presenter.fullname" . }}
   apiGroup: rbac.authorization.k8s.io
 {{- end }}

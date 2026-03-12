@@ -1,0 +1,48 @@
+# values.e2e.yaml — kind-based in-cluster E2E testing.
+#
+# Usage:
+#   docker build -t resources-presenter:dev .
+#   kind load docker-image resources-presenter:dev --name krateo-e2e
+#   helm template resources-presenter ./chart \
+#     -n krateo-system \
+#     -f ./chart/values.e2e.yaml | kubectl apply -f -
+
+image:
+  repository: resources-presenter
+  pullPolicy: Never   # image loaded via `kind load docker-image`
+  tag: "dev"
+
+# DB credentials inline — no external secret needed for E2E.
+secret:
+  name: ""
+
+config:
+  DEBUG: "true"
+
+  # Database (matches deploy/test-postgres.yaml)
+  DB_HOST: "postgres.krateo-system.svc.cluster.local"
+  DB_PORT: "5432"
+  DB_NAME: "krateo"
+  DB_USER: "krateo"
+  DB_PASS: "krateo"
+  DB_PARAMS: "sslmode=disable&connect_timeout=5"
+  DB_READY_TIMEOUT: "2m"
+
+  # Authentication
+  SIGN_KEY: "e2e-test-sign-key"
+  AUTHN_NS: "krateo-system"
+
+# Faster probes for testing (don't wait 45s)
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
