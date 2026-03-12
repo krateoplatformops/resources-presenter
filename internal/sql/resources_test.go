@@ -13,7 +13,7 @@ import (
 
 // baseCols returns the column names expected for raw=false queries.
 func baseCols() []string {
-	return []string{"resource_name", "namespace", "resource_group", "resource_version", "resource_kind", "cluster_name", "created_at", "updated_at", "composition_id", "id"}
+	return []string{"resource_name", "namespace", "resource_group", "resource_version", "resource_kind", "resource_plural", "cluster_name", "created_at", "updated_at", "composition_id", "id"}
 }
 
 // rawCols returns the column names expected for raw=true queries.
@@ -43,12 +43,12 @@ func deploymentParams(limit int) ListParams {
 
 // panelRow builds an AddRow call for a Panel resource.
 func panelRow(name, ns, cluster string, created, updated time.Time, compID *string, id int64) []any {
-	return []any{name, ns, "widgets.templates.krateo.io", "v1beta1", "Panel", cluster, created, updated, compID, id}
+	return []any{name, ns, "widgets.templates.krateo.io", "v1beta1", "Panel", "panels", cluster, created, updated, compID, id}
 }
 
 // deploymentRow builds an AddRow call for a Deployment resource.
 func deploymentRow(name, ns, cluster string, created, updated time.Time, compID *string, id int64) []any {
-	return []any{name, ns, "apps", "v1", "Deployment", cluster, created, updated, compID, id}
+	return []any{name, ns, "apps", "v1", "Deployment", "deployments", cluster, created, updated, compID, id}
 }
 
 // --- panelArgs / deploymentArgs: the 3 required filter args ---
@@ -139,6 +139,9 @@ func TestListResources_SinglePage(t *testing.T) {
 	}
 	if item.Kind != "Panel" {
 		t.Errorf("expected kind Panel, got %s", item.Kind)
+	}
+	if item.Resource != "panels" {
+		t.Errorf("expected resource panels, got %s", item.Resource)
 	}
 	if item.ClusterName != "cluster-a" {
 		t.Errorf("expected cluster_name cluster-a, got %s", item.ClusterName)
@@ -265,6 +268,9 @@ func TestListResources_RawTrue(t *testing.T) {
 	}
 	if item.Kind != "Deployment" {
 		t.Errorf("expected kind Deployment, got %s", item.Kind)
+	}
+	if item.Resource != "deployments" {
+		t.Errorf("expected resource deployments, got %s", item.Resource)
 	}
 	if item.Raw == nil {
 		t.Fatal("expected raw to be populated")

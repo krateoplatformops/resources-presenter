@@ -11,7 +11,7 @@ Supported methods:
 
 Each item in the response represents the current state of a Kubernetes resource (one row per `global_uid`).
 
-Each item includes: `name`, `namespace`, `group`, `version`, `kind`, `cluster_name`, `created_at`, `updated_at`, and `composition_id` (when set).
+Each item includes: `name`, `namespace`, `group`, `version`, `kind`, `resource`, `cluster_name`, `created_at`, `updated_at`, and `composition_id` (when set).
 Use `raw=true` to also include the full Kubernetes object under the `raw` field.
 
 ## Resource Resolution
@@ -303,6 +303,7 @@ If you change filters between pages, pagination continuity is broken.
       "group": "apps",
       "version": "v1",
       "kind": "Deployment",
+      "resource": "deployments",
       "cluster_name": "cluster-a",
       "created_at": "2026-03-01T10:00:00Z",
       "updated_at": "2026-03-06T14:30:00Z"
@@ -313,6 +314,7 @@ If you change filters between pages, pagination continuity is broken.
       "group": "apps",
       "version": "v1",
       "kind": "Deployment",
+      "resource": "deployments",
       "cluster_name": "cluster-a",
       "created_at": "2026-02-15T08:00:00Z",
       "updated_at": "2026-03-06T14:25:00Z",
@@ -331,6 +333,7 @@ If you change filters between pages, pagination continuity is broken.
   - `group`: API group (e.g. `apps`)
   - `version`: API version (e.g. `v1`)
   - `kind`: resource kind (e.g. `Deployment`)
+  - `resource`: resource plural name (e.g. `deployments`) — useful for constructing API server URLs
   - `cluster_name`: cluster where the resource lives
   - `created_at`: when the resource was first ingested (RFC3339)
   - `updated_at`: when the resource was last updated (RFC3339)

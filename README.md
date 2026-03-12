@@ -59,6 +59,7 @@ GET uses query parameters. POST uses the same fields as a JSON body (with `label
       "group": "widgets.templates.krateo.io",
       "version": "v1beta1",
       "kind": "Panel",
+      "resource": "panels",
       "cluster_name": "prod-eu",
       "created_at": "2026-03-01T10:00:00Z",
       "updated_at": "2026-03-06T14:30:00Z"

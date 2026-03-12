@@ -45,6 +45,20 @@ type Authorizer interface {
 // is valid, there are just no instances matching the filters.
 func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// NOTE on latency measurement:
+		//
+		// totalStart marks the beginning of the handler. It does NOT include
+		// time spent in upstream middleware (TraceId → Access → CORS → UserConfig).
+		// In particular, the UserConfig middleware (JWT validation + fetching the
+		// user's clientconfig Secret from the Kubernetes API) runs BEFORE this
+		// handler and can add significant latency.
+		//
+		// The Access middleware (use.Access) wraps the entire chain and logs its
+		// own "latency" field, which DOES include middleware time. Therefore:
+		//
+		//   Access.latency  =  UserConfig time  +  handler 5_total time
+		//
+		// The gap between Access.latency and 5_total is the UserConfig middleware.
 		totalStart := time.Now()
 
 		ctx := xcontext.BuildContext(r.Context())
@@ -79,9 +93,9 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 				slog.String("trace_id", traceId),
 				slog.Int("status_code", statusCode),
 				slog.Int("rows_returned", rowsReturned),
-				slog.Group("duration_ms",
+				slog.Group("handler_duration_ms",
 					slog.Float64("1_parse", float64(parseDuration.Microseconds())/1000.0),
-					slog.Float64("2_rbac", float64(rbacDuration.Microseconds())/1000.0),
+					slog.Float64("2_rbac_authz", float64(rbacDuration.Microseconds())/1000.0),
 					slog.Float64("3_query", float64(queryDuration.Microseconds())/1000.0),
 					slog.Float64("4_serialize", float64(serDuration.Microseconds())/1000.0),
 					slog.Float64("5_total", float64(totalDuration.Microseconds())/1000.0),
@@ -91,7 +105,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 				attrs = append(attrs, slog.Any("err", queryErr))
 			}
 
-			log.LogAttrs(r.Context(), lvl, "request completed", attrs...)
+			log.LogAttrs(r.Context(), lvl, "request completed by handler", attrs...)
 		}()
 
 		// Only GET and POST are allowed.
