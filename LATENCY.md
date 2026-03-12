@@ -27,14 +27,14 @@ The gap between `latency` and `5_total` is the `UserConfig` middleware.
 | 4 | `4_serialize` | JSON marshaling into response buffer | < 1 ms |
 | - | `5_total` | Sum of phases 1-4 | - |
 
-## UserConfig middleware (the gap)
+## UserConfig middleware
 
 The `UserConfig` middleware ([plumbing/server/use/userconfig.go](../plumbing/server/use/userconfig.go)) runs **before** the handler and performs two operations:
 
 1. **JWT validation** — decodes and verifies the HS256 token from the `Authorization` header
 2. **K8s Secret fetch** — calls `endpoints.FromSecret()` to read the `{username}-clientconfig` Secret from the Kubernetes API server
 
-The Secret fetch is a network call to the K8s API and accounts for most of the gap.
+The Secret fetch is a network call to the K8s API and accounts for a large portion of the total latency.
 
 ## Example
 
