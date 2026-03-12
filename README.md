@@ -10,54 +10,21 @@ Key features:
 
 - **GET and POST** query support with filter capabilities
 - **Keyset pagination** (`updated_at DESC, id DESC`) for stable, efficient paging
-- **Dynamic resource kind resolution** via `group`, `version`, and `kind` query parameters — no static registry needed
+- **Dynamic resource resolution** via `group`, `version`, and `resource` query parameters — no static registry needed
 - **JSONB label filtering** via PostgreSQL containment (`@>`)
-- **Access policy hook** for future authentication/authorization integration (TODO)
-- **Structured latency logging** for every request (parse, query, serialize phases)
-
-## Quick Start
-
-### Prerequisites for local development
-
-- Go 1.25+
-- Docker (for PostgreSQL)
-
-### Run locally
-
-```bash
-# 1. Start PostgreSQL
-docker run -d --name krateo-pg \
-  -e POSTGRES_USER=krateo \
-  -e POSTGRES_PASSWORD=krateo \
-  -e POSTGRES_DB=krateo \
-  -p 5432:5432 \
-  postgres:18
-
-# 2. Create the schema
-docker exec -i krateo-pg psql -U krateo -d krateo < assets/resources.schema.sql
-
-# 3. (Optional) Seed sample data
-docker exec -i krateo-pg psql -U krateo -d krateo < assets/seed_data.sql
-
-# 4. Run the service
-DB_USER=krateo DB_PASS=krateo DB_HOST=localhost DB_NAME=krateo \
-  DB_PARAMS="sslmode=disable" DEBUG=true \
-  go run .
-
-# 5. Query
-curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel' | jq
-```
+- **RBAC enforcement**
+- **Structured latency logging** for every request (parse, rbac, query, serialize phases)
 
 ## API
 
 ### Endpoint
 
 ```
-GET  /resources?group=<group>&version=<version>&kind=<kind>
+GET  /resources?group=<group>&version=<version>&resource=<resource>&namespace=<namespace>
 POST /resources
 ```
 
-The resource kind is identified by three **required** parameters: `group`, `version`, and `kind`. These are combined into the DB format `group/version.Kind` (e.g. `widgets.templates.krateo.io/v1beta1.Panel`).
+The resource type is identified by three **required** parameters: `group`, `version`, and `resource`. These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural` in the `krateo_resources` table.
 
 ### Filters
 
@@ -67,7 +34,7 @@ All filters are optional and combined with `AND`.
 | --- | --- | --- |
 | `group` | string | **Required.** API group (e.g. `apps`, `widgets.templates.krateo.io`) |
 | `version` | string | **Required.** API version (e.g. `v1`, `v1beta1`) |
-| `kind` | string | **Required.** Resource kind (e.g. `Deployment`, `Panel`). Case-sensitive. |
+| `resource` | string | **Required.** Resource plural name (e.g. `deployments`, `panels`). Lowercase. |
 | `cluster` | string | Exact match on `cluster_name` |
 | `namespace` | string | Exact match on `namespace` |
 | `composition_id` | UUID | Exact match on `composition_id` |
@@ -78,7 +45,7 @@ All filters are optional and combined with `AND`.
 | `limit` | integer | Page size (default: `100`, max: `5000`) |
 | `cursor` | base64 | Opaque keyset cursor from previous response |
 
-GET uses query parameters. POST uses the same fields as a JSON body (with `labels` as a JSON object, not a string).
+GET uses query parameters. POST uses the same fields as a JSON body (with `labels` as a JSON object, not a string). Note: `kind` is not a query parameter — the `resource` (plural) field is used for filtering.
 
 ### Response
 
@@ -89,7 +56,8 @@ GET uses query parameters. POST uses the same fields as a JSON body (with `label
     {
       "name": "my-panel",
       "namespace": "krateo-system",
-      "apiVersion": "widgets.templates.krateo.io/v1beta1",
+      "group": "widgets.templates.krateo.io",
+      "version": "v1beta1",
       "kind": "Panel",
       "cluster_name": "prod-eu",
       "created_at": "2026-03-01T10:00:00Z",
@@ -110,7 +78,7 @@ Kubernetes-style `Status` objects:
 
 | Code | Condition |
 | --- | --- |
-| `400` | Invalid/missing parameters (missing group/version/kind, bad UUID, JSON, timestamp, cursor) |
+| `400` | Invalid/missing parameters (missing group/version/resource, bad UUID, JSON, timestamp, cursor) |
 | `405` | Method not allowed |
 | `500` | Internal server error |
 
@@ -143,7 +111,7 @@ go test ./internal/sql/ -cover -v
 go test ./internal/handlers/ -cover -v
 ```
 
-See [TESTING.md](TESTING.md) for manual testing with curl (including seed data and POST examples).
+See [TESTING.md](TESTING.md) for detailed testing instructions.
 
 ## Health Probes
 

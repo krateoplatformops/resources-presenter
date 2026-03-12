@@ -17,23 +17,26 @@ type Querier interface {
 
 // ListParams contains the parsed and validated query parameters for listing resources.
 type ListParams struct {
-	ResourceKind  string
-	Cluster       string
-	Namespace     string
-	CompositionID string // UUID as string; empty means no filter
-	Name          string // case-insensitive partial match (ILIKE %name%)
-	Labels        string // raw JSON string for JSONB containment (@>)
-	Since         *time.Time
-	Raw           bool
-	Limit         int
-	Cursor        EncodedCursor
+	ResourceGroup   string // e.g. "apps", "" for core
+	ResourceVersion string // e.g. "v1"
+	ResourcePlural  string // e.g. "deployments"
+	Cluster         string
+	Namespace       string
+	CompositionID   string // UUID as string; empty means no filter
+	Name            string // case-insensitive partial match (ILIKE %name%)
+	Labels          string // raw JSON string for JSONB containment (@>)
+	Since           *time.Time
+	Raw             bool
+	Limit           int
+	Cursor          EncodedCursor
 }
 
 // ResourceItem is the response DTO for a single resource.
 type ResourceItem struct {
 	Name          string    `json:"name"`
 	Namespace     string    `json:"namespace"`
-	APIVersion    string    `json:"apiVersion"`
+	Group         string    `json:"group"`
+	Version       string    `json:"version"`
 	Kind          string    `json:"kind"`
 	ClusterName   string    `json:"cluster_name"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -76,19 +79,22 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 
 	for rows.Next() {
 		var (
-			resourceName  string
-			namespace     string
-			resourceKind  string
-			clusterName   string
-			createdAt     time.Time
-			updatedAt     time.Time
-			compositionID *string
-			id            int64
-			rawJSON       []byte // TODO: can we switch to json.RawMessage here?
+			resourceName    string
+			namespace       string
+			resourceGroup   string
+			resourceVersion string
+			resourceKind    string
+			clusterName     string
+			createdAt       time.Time
+			updatedAt       time.Time
+			compositionID   *string
+			id              int64
+			rawJSON         []byte
 		)
 
 		scanDest := []any{
-			&resourceName, &namespace, &resourceKind,
+			&resourceName, &namespace,
+			&resourceGroup, &resourceVersion, &resourceKind,
 			&clusterName, &createdAt, &updatedAt, &compositionID,
 			&id,
 		}
@@ -100,13 +106,12 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 
-		apiVersion, kind := splitResourceKind(resourceKind)
-
 		item := ResourceItem{
 			Name:          resourceName,
 			Namespace:     namespace,
-			APIVersion:    apiVersion,
-			Kind:          kind,
+			Group:         resourceGroup,
+			Version:       resourceVersion,
+			Kind:          resourceKind,
 			ClusterName:   clusterName,
 			CreatedAt:     createdAt,
 			UpdatedAt:     updatedAt,
@@ -153,8 +158,13 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 func buildListQuery(p ListParams) (string, []any, error) {
 	b := NewBuilder()
 
-	// resource_kind is required
-	b.Where("resource_kind = ?", p.ResourceKind)
+	// GVR decomposition: group, version, plural are required filters.
+	b.Where("resource_group = ?", p.ResourceGroup)
+	b.Where("resource_version = ?", p.ResourceVersion)
+	b.Where("resource_plural = ?", p.ResourcePlural)
+
+	// Soft-delete filter: only return active rows.
+	b.WhereRaw("deleted_at IS NULL")
 
 	if p.Cluster != "" {
 		b.Where("cluster_name = ?", p.Cluster)
@@ -195,7 +205,7 @@ func buildListQuery(p ListParams) (string, []any, error) {
 	b.Limit(p.Limit + 1)
 
 	// Columns
-	cols := "resource_name, namespace, resource_kind, cluster_name, created_at, updated_at, composition_id, id"
+	cols := "resource_name, namespace, resource_group, resource_version, resource_kind, cluster_name, created_at, updated_at, composition_id, id"
 	if p.Raw {
 		cols += ", raw"
 	}
@@ -209,16 +219,4 @@ func buildListQuery(p ListParams) (string, []any, error) {
 func escapeLIKE(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return r.Replace(s)
-}
-
-// splitResourceKind splits "apiVersion.Kind" into its two parts.
-// The DB stores resource_kind as e.g. "composition.krateo.io/v1-2-2.GithubScaffoldingWithCompositionPage".
-// We use the last dot as the separator because the apiVersion portion can also contain dots.
-// For example, "apps/v1.Deployment" -> ("apps/v1", "Deployment").
-func splitResourceKind(rk string) (apiVersion, kind string) {
-	idx := strings.LastIndex(rk, ".")
-	if idx < 0 {
-		return "", rk
-	}
-	return rk[:idx], rk[idx+1:]
 }

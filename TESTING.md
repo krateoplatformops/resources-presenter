@@ -64,7 +64,7 @@ Deploys an ephemeral Postgres pod with the schema and 500 seed Panel resources p
 
 ```bash
 kubectl apply -f deploy/test-postgres.yaml
-kubectl wait --for=condition=ready pod -l app=postgres -n krateo-system --timeout=120s
+kubectl wait --for=condition=ready pod -l app=postgres -n krateo-system --timeout=240s
 ```
 
 Verify the database is populated:
@@ -78,7 +78,7 @@ Expected output: `500`.
 
 ```bash
 kubectl exec -n krateo-system deploy/postgres -- \
-  psql -U krateo -d krateo -c "SELECT cluster_name, namespace, resource_kind, resource_name FROM krateo_resources;"
+  psql -U krateo -d krateo -c "SELECT cluster_name, namespace, resource_group, resource_version, resource_kind, resource_plural, resource_name FROM krateo_resources LIMIT 20;"
 ```
 
 Expected output: a table of 500 rows with various cluster/namespace/kind combinations.
@@ -111,7 +111,7 @@ kubectl wait --for=condition=ready pod \
 Verify readiness:
 
 ```bash
-kubectl logs -n krateo-system -l app.kubernetes.io/name=resources-presenter
+kubectl logs deploy/resources-presenter -n krateo-system
 ```
 
 You should see:
@@ -148,7 +148,6 @@ You should see:
 ```bash
 # The SIGN_KEY must match the one in values.e2e.yaml
 # NOTE: flags MUST come before the positional argument (username).
-# Go's flag package stops parsing at the first non-flag argument.
 TOKEN=$(krateoctl add-user \
   -n krateo-system \
   -k "e2e-test-sign-key" \
@@ -202,28 +201,28 @@ curl -v -s http://localhost:8080/readyz
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&resource=panels&namespace=krateo-system' | jq
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system' | jq
 ```
 
 **List Panels with full raw objects:**
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&resource=panels&namespace=krateo-system&raw=true&limit=2' | jq
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&raw=true&limit=2' | jq
 ```
 
 **Filter by cluster:**
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&resource=panels&namespace=krateo-system&cluster=prod-eu' | jq
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&cluster=prod-eu' | jq
 ```
 
 **Search by name** (case-insensitive partial match):
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&resource=panels&namespace=krateo-system&name=blueprints' | jq
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&name=blueprints' | jq
 ```
 
 **Filter by labels:**
@@ -233,7 +232,6 @@ curl --get -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/resources' \
   --data-urlencode 'group=widgets.templates.krateo.io' \
   --data-urlencode 'version=v1beta1' \
-  --data-urlencode 'kind=Panel' \
   --data-urlencode 'resource=panels' \
   --data-urlencode 'namespace=krateo-system' \
   --data-urlencode 'labels={"app.kubernetes.io/part-of":"dashboard"}' | jq
@@ -244,11 +242,11 @@ curl --get -H "Authorization: Bearer $TOKEN" \
 ```bash
 # Page 1
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&resource=panels&namespace=krateo-system&limit=5' | jq
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&limit=5' | jq
 
 # Copy the "cursor" value from the response, then:
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&resource=panels&namespace=krateo-system&limit=5&cursor=<CURSOR>' | jq
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&limit=5&cursor=<CURSOR>' | jq
 ```
 
 **POST with JSON body:**
@@ -260,7 +258,6 @@ curl -s -X POST http://localhost:8080/resources \
   -d '{
     "group": "widgets.templates.krateo.io",
     "version": "v1beta1",
-    "kind": "Panel",
     "resource": "panels",
     "namespace": "krateo-system",
     "cluster": "prod-eu",
@@ -274,15 +271,20 @@ curl -s -X POST http://localhost:8080/resources \
 ```bash
 # Missing namespace → 400
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&resource=panels' | jq
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels' | jq
 
 # Missing auth header → 401
-curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&resource=panels&namespace=krateo-system' | jq
+curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system' | jq
 
 # RBAC denied (namespace the user has no access to) → 403
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&resource=panels&namespace=kube-system' | jq
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=kube-system' | jq
+
+# Namespace and resource for which the user has no permissions → 403
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=demo-system' | jq
 ```
+
 
 Stop port-forwarding:
 
@@ -314,7 +316,7 @@ kubectl port-forward svc/resources-presenter 8080:8080 -n krateo-system &
 # Test
 curl -s http://localhost:8080/readyz | jq
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&kind=Panel&resource=panels&namespace=krateo-system' | jq
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system' | jq
 
 # Teardown
 kind delete cluster --name krateo-e2e
@@ -333,9 +335,8 @@ Benchmarks live in `internal/sql/bench_test.go` and measure the hot paths of the
 | `BenchmarkCursorEncode` | Encoding a keyset cursor to base64 |
 | `BenchmarkCursorDecode` | Decoding a base64 cursor back to struct |
 | `BenchmarkCursorRoundtrip` | Full encode + decode cycle |
-| `BenchmarkBuildListQuery_Minimal` | SQL builder with only resource_kind filter |
+| `BenchmarkBuildListQuery_Minimal` | SQL builder with required filters only (group, version, plural) |
 | `BenchmarkBuildListQuery_AllFilters` | SQL builder with all 7 filters + cursor active |
-| `BenchmarkSplitResourceKind` | Parsing `apiVersion.Kind` strings |
 | `BenchmarkEscapeLIKE` | Escaping LIKE special characters |
 | `BenchmarkJSONMarshal_10/100/1000` | Serializing result sets of varying sizes |
 | `BenchmarkJSONMarshal_1000_WithRaw` | Serializing 1000 items including raw JSONB |

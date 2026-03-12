@@ -11,32 +11,32 @@ Supported methods:
 
 Each item in the response represents the current state of a Kubernetes resource (one row per `global_uid`).
 
-Each item includes: `name`, `namespace`, `apiVersion`, `kind`, `cluster_name`, `created_at`, `updated_at`, and `composition_id` (when set).
+Each item includes: `name`, `namespace`, `group`, `version`, `kind`, `cluster_name`, `created_at`, `updated_at`, and `composition_id` (when set).
 Use `raw=true` to also include the full Kubernetes object under the `raw` field.
 
-## Resource Kind Resolution
+## Resource Resolution
 
-The resource kind is identified by three **required** parameters:
+The resource type is identified by three **required** parameters:
 
 | Parameter | Example | Description |
 | --- | --- | --- |
 | `group` | `apps`, `widgets.templates.krateo.io` | Kubernetes API group |
 | `version` | `v1`, `v1beta1` | API version |
-| `kind` | `Deployment`, `Panel` | Resource kind (case-sensitive, PascalCase) |
+| `resource` | `deployments`, `panels` | Resource plural name (lowercase) |
 
-These are combined into the DB format `group/version.Kind` (e.g. `widgets.templates.krateo.io/v1beta1.Panel`).
+These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural`.
 
 Missing any of the three returns `400`.
 
 ## Query Parameters
 
-All filters (except `group`, `version`, `kind`) are optional and are combined with `AND`.
+All filters (except `group`, `version`, `resource`) are optional and are combined with `AND`.
 
 | Parameter | Type | Behavior |
 | --- | --- | --- |
 | `group` | string | **Required.** API group. |
 | `version` | string | **Required.** API version. |
-| `kind` | string | **Required.** Resource kind (case-sensitive). |
+| `resource` | string | **Required.** Resource plural name (lowercase). |
 | `cluster` | string | Exact match on `cluster_name`. |
 | `namespace` | string | Exact match on `namespace`. |
 | `composition_id` | UUID | Exact match on `composition_id`. Must be a valid RFC 4122 UUID. |
@@ -60,7 +60,7 @@ Example body:
 {
   "group": "apps",
   "version": "v1",
-  "kind": "Deployment",
+  "resource": "deployments",
   "cluster": "cluster-a",
   "namespace": "prod",
   "composition_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -77,7 +77,7 @@ Example body:
 
 Notes:
 
-- `group`, `version`, and `kind` are **required** in the JSON body too.
+- `group`, `version`, and `resource` are **required** in the JSON body too.
 - Unknown JSON fields return `400`.
 - Empty body returns `400`.
 - `limit` defaults to `100` when omitted or `<= 0`.
@@ -91,7 +91,7 @@ Notes:
 curl --get "http://localhost:8080/resources" \
   --data-urlencode "group=widgets.templates.krateo.io" \
   --data-urlencode "version=v1beta1" \
-  --data-urlencode "kind=Panel"
+  --data-urlencode "resource=panels"
 ```
 
 ### 2) GET: filter by cluster + namespace
@@ -100,7 +100,7 @@ curl --get "http://localhost:8080/resources" \
 curl --get "http://localhost:8080/resources" \
   --data-urlencode "group=apps" \
   --data-urlencode "version=v1" \
-  --data-urlencode "kind=Deployment" \
+  --data-urlencode "resource=deployments" \
   --data-urlencode "cluster=cluster-a" \
   --data-urlencode "namespace=default"
 ```
@@ -111,7 +111,7 @@ curl --get "http://localhost:8080/resources" \
 curl --get "http://localhost:8080/resources" \
   --data-urlencode "group=apps" \
   --data-urlencode "version=v1" \
-  --data-urlencode "kind=Deployment" \
+  --data-urlencode "resource=deployments" \
   --data-urlencode "name=api"
 ```
 
@@ -123,7 +123,7 @@ Matches names like `api`, `API`, `my-api-service`, `api-gateway`.
 curl --get "http://localhost:8080/resources" \
   --data-urlencode "group=apps" \
   --data-urlencode "version=v1" \
-  --data-urlencode "kind=Deployment" \
+  --data-urlencode "resource=deployments" \
   --data-urlencode 'labels={"app":"nginx","tier":"backend"}'
 ```
 
@@ -135,7 +135,7 @@ curl --get "http://localhost:8080/resources" \
 curl --get "http://localhost:8080/resources" \
   --data-urlencode "group=apps" \
   --data-urlencode "version=v1" \
-  --data-urlencode "kind=Deployment" \
+  --data-urlencode "resource=deployments" \
   --data-urlencode "since=2026-03-01T00:00:00Z"
 ```
 
@@ -147,7 +147,7 @@ Returns resources with `updated_at >= since`.
 curl --get "http://localhost:8080/resources" \
   --data-urlencode "group=widgets.templates.krateo.io" \
   --data-urlencode "version=v1beta1" \
-  --data-urlencode "kind=Panel" \
+  --data-urlencode "resource=panels" \
   --data-urlencode "composition_id=550e8400-e29b-41d4-a716-446655440000"
 ```
 
@@ -157,7 +157,7 @@ curl --get "http://localhost:8080/resources" \
 curl --get "http://localhost:8080/resources" \
   --data-urlencode "group=widgets.templates.krateo.io" \
   --data-urlencode "version=v1beta1" \
-  --data-urlencode "kind=Panel" \
+  --data-urlencode "resource=panels" \
   --data-urlencode "raw=true"
 ```
 
@@ -167,7 +167,7 @@ curl --get "http://localhost:8080/resources" \
 curl --get "http://localhost:8080/resources" \
   --data-urlencode "group=apps" \
   --data-urlencode "version=v1" \
-  --data-urlencode "kind=Deployment" \
+  --data-urlencode "resource=deployments" \
   --data-urlencode "cluster=cluster-a" \
   --data-urlencode "namespace=prod" \
   --data-urlencode "name=api" \
@@ -185,7 +185,7 @@ curl --request POST "http://localhost:8080/resources" \
   --data '{
     "group": "apps",
     "version": "v1",
-    "kind": "Deployment",
+    "resource": "deployments",
     "cluster": "cluster-a",
     "namespace": "prod",
     "name": "api",
@@ -215,7 +215,7 @@ When there are no more pages, the `cursor` field is absent in the response.
 curl --get "http://localhost:8080/resources" \
   --data-urlencode "group=apps" \
   --data-urlencode "version=v1" \
-  --data-urlencode "kind=Deployment" \
+  --data-urlencode "resource=deployments" \
   --data-urlencode "cluster=cluster-a" \
   --data-urlencode "limit=100"
 
@@ -223,7 +223,7 @@ curl --get "http://localhost:8080/resources" \
 curl --get "http://localhost:8080/resources" \
   --data-urlencode "group=apps" \
   --data-urlencode "version=v1" \
-  --data-urlencode "kind=Deployment" \
+  --data-urlencode "resource=deployments" \
   --data-urlencode "cluster=cluster-a" \
   --data-urlencode "limit=100" \
   --data-urlencode "cursor=<CURSOR_PAGE_1>"
@@ -238,7 +238,7 @@ curl --request POST "http://localhost:8080/resources" \
   --data '{
     "group": "apps",
     "version": "v1",
-    "kind": "Deployment",
+    "resource": "deployments",
     "cluster": "cluster-a",
     "limit": 100
   }'
@@ -249,7 +249,7 @@ curl --request POST "http://localhost:8080/resources" \
   --data '{
     "group": "apps",
     "version": "v1",
-    "kind": "Deployment",
+    "resource": "deployments",
     "cluster": "cluster-a",
     "limit": 100,
     "cursor": "<CURSOR_PAGE_1>"
@@ -267,7 +267,7 @@ while true; do
     RESP=$(curl --silent --get "$BASE_URL" \
       --data-urlencode "group=apps" \
       --data-urlencode "version=v1" \
-      --data-urlencode "kind=Deployment" \
+      --data-urlencode "resource=deployments" \
       --data-urlencode "cluster=cluster-a" \
       --data-urlencode "limit=100" \
       --data-urlencode "cursor=$CURSOR")
@@ -275,7 +275,7 @@ while true; do
     RESP=$(curl --silent --get "$BASE_URL" \
       --data-urlencode "group=apps" \
       --data-urlencode "version=v1" \
-      --data-urlencode "kind=Deployment" \
+      --data-urlencode "resource=deployments" \
       --data-urlencode "cluster=cluster-a" \
       --data-urlencode "limit=100")
   fi
@@ -300,7 +300,8 @@ If you change filters between pages, pagination continuity is broken.
     {
       "name": "my-api-service",
       "namespace": "prod",
-      "apiVersion": "apps/v1",
+      "group": "apps",
+      "version": "v1",
       "kind": "Deployment",
       "cluster_name": "cluster-a",
       "created_at": "2026-03-01T10:00:00Z",
@@ -309,7 +310,8 @@ If you change filters between pages, pagination continuity is broken.
     {
       "name": "api-gateway",
       "namespace": "prod",
-      "apiVersion": "apps/v1",
+      "group": "apps",
+      "version": "v1",
       "kind": "Deployment",
       "cluster_name": "cluster-a",
       "created_at": "2026-02-15T08:00:00Z",
@@ -326,7 +328,8 @@ If you change filters between pages, pagination continuity is broken.
 - `items`: array of resources with the following fields:
   - `name`: resource name
   - `namespace`: Kubernetes namespace
-  - `apiVersion`: API version (e.g. `apps/v1`)
+  - `group`: API group (e.g. `apps`)
+  - `version`: API version (e.g. `v1`)
   - `kind`: resource kind (e.g. `Deployment`)
   - `cluster_name`: cluster where the resource lives
   - `created_at`: when the resource was first ingested (RFC3339)
@@ -345,6 +348,6 @@ Errors are returned as Kubernetes-style `Status` objects:
 
 | Status Code | Condition |
 | --- | --- |
-| `400` | Invalid or missing parameters (missing group/version/kind, bad UUID, JSON, timestamp, limit, cursor) |
+| `400` | Invalid or missing parameters (missing group/version/resource, bad UUID, JSON, timestamp, limit, cursor) |
 | `405` | Method not allowed (only GET and POST are supported) |
 | `500` | Internal server error (database failure, serialization error) |

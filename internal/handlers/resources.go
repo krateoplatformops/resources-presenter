@@ -33,9 +33,10 @@ type Authorizer interface {
 }
 
 // ResourcesHandler returns an HTTP handler for GET/POST /resources.
-// The resource type is identified by query parameters: group, version, kind, resource.
-//   - group, version, kind → combined into DB format: group/version.Kind
-//   - resource → K8s plural resource name (e.g. "panels"), used for RBAC checks
+// The resource type is identified by query parameters: group, version, resource (plural).
+//   - group    → API group (e.g. "apps", "widgets.templates.krateo.io")
+//   - version  → API version (e.g. "v1", "v1beta1")
+//   - resource → K8s plural resource name (e.g. "panels", "deployments")
 //
 // GET uses query parameters; POST uses a JSON body with the same fields.
 //
@@ -51,7 +52,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 
 		// Per-request state for the deferred log.
 		var (
-			resourceKind  string
+			gvr           string
 			statusCode    int
 			rowsReturned  int
 			parseDuration time.Duration
@@ -74,7 +75,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 			attrs := []slog.Attr{
 				slog.String("handler", "resources"),
 				slog.String("method", r.Method),
-				slog.String("resource_kind", resourceKind),
+				slog.String("gvr", gvr),
 				slog.String("trace_id", traceId),
 				slog.Int("status_code", statusCode),
 				slog.Int("rows_returned", rowsReturned),
@@ -106,8 +107,8 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 
 		params, parseErr := parseRequest(r)
 		parseDuration = time.Since(parseStart)
-		if params.ResourceKind != "" {
-			resourceKind = params.ResourceKind
+		if params.ResourcePlural != "" {
+			gvr = params.ResourceGroup + "/" + params.ResourceVersion + "." + params.ResourcePlural
 		}
 
 		if parseErr != nil {
@@ -119,7 +120,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 		// --- Phase 2: RBAC authorization ---
 		rbacStart := time.Now()
 
-		if !auth.CanGet(r.Context(), params.Group, params.Resource, params.Namespace) {
+		if !auth.CanGet(r.Context(), params.ResourceGroup, params.ResourcePlural, params.Namespace) {
 			rbacDuration = time.Since(rbacStart)
 			statusCode = http.StatusForbidden
 			response.Encode(w, response.New(http.StatusForbidden, fmt.Errorf("forbidden: insufficient permissions")))
@@ -174,36 +175,27 @@ type handlerError struct {
 	msg    string
 }
 
-// handlerParams wraps sql.ListParams with the parsed group/resource fields
-// needed for the RBAC check.
+// handlerParams wraps sql.ListParams.
+// Group and plural resource name for RBAC are accessed via
+// ListParams.ResourceGroup and ListParams.ResourcePlural.
 type handlerParams struct {
 	sql.ListParams
-	Group    string // API group (e.g. "apps", "widgets.templates.krateo.io")
-	Resource string // K8s plural resource name (e.g. "panels", "deployments"), used for RBAC
-}
-
-// buildResourceKind constructs the DB resource_kind from group, version, and kind.
-// Format: "group/version.Kind" (e.g. "widgets.templates.krateo.io/v1beta1.Panel").
-func buildResourceKind(group, version, kind string) string {
-	return group + "/" + version + "." + kind
 }
 
 // parseRequest validates the request and extracts params from query string (GET) or JSON body (POST).
-// The resource type is identified by required query/body params: group, version, kind, resource.
+// The resource type is identified by required query/body params: group, version, resource (plural).
 // Namespace is required for RBAC authorization.
 func parseRequest(r *http.Request) (handlerParams, *handlerError) {
 	var (
-		params   sql.ListParams
-		group    string
-		resource string
-		err      error
+		params sql.ListParams
+		err    error
 	)
 
 	switch r.Method {
 	case http.MethodPost:
-		params, group, resource, err = parseListParamsJSON(r)
+		params, err = parseListParamsJSON(r)
 	default:
-		params, group, resource, err = parseListParams(r)
+		params, err = parseListParams(r)
 	}
 
 	if err != nil {
@@ -215,37 +207,34 @@ func parseRequest(r *http.Request) (handlerParams, *handlerError) {
 
 	// Namespace is required for RBAC authorization. At least for now
 	if params.Namespace == "" {
-		return handlerParams{ListParams: params, Group: group, Resource: resource}, &handlerError{
+		return handlerParams{ListParams: params}, &handlerError{
 			status: http.StatusBadRequest,
 			msg:    "query parameter 'namespace' is required",
 		}
 	}
 
-	return handlerParams{ListParams: params, Group: group, Resource: resource}, nil
+	return handlerParams{ListParams: params}, nil
 }
 
-func parseListParams(r *http.Request) (sql.ListParams, string, string, error) {
+func parseListParams(r *http.Request) (sql.ListParams, error) {
 	q := r.URL.Query()
 
-	// group, version, kind, resource are required to identify the resource type.
+	// group, version, resource (plural) are required to identify the resource type.
 	group := q.Get("group")
 	version := q.Get("version")
-	kind := q.Get("kind")
 	resource := q.Get("resource")
-	if group == "" || version == "" || kind == "" || resource == "" {
-		return sql.ListParams{}, "", "", fmt.Errorf("query parameters 'group', 'version', 'kind', and 'resource' are all required")
+	if group == "" || version == "" || resource == "" {
+		return sql.ListParams{}, fmt.Errorf("query parameters 'group', 'version', and 'resource' are all required")
 	}
-
-	resourceKind := buildResourceKind(group, version, kind)
 
 	limit, err := parseLimit(q.Get("limit"))
 	if err != nil {
-		return sql.ListParams{}, "", "", err
+		return sql.ListParams{}, err
 	}
 
 	compositionID := q.Get("composition_id")
 	if compositionID != "" && !uuidRegex.MatchString(compositionID) {
-		return sql.ListParams{}, "", "", fmt.Errorf("invalid composition_id: not a valid UUID")
+		return sql.ListParams{}, fmt.Errorf("invalid composition_id: not a valid UUID")
 	}
 
 	// Validate labels JSON if provided.
@@ -253,7 +242,7 @@ func parseListParams(r *http.Request) (sql.ListParams, string, string, error) {
 	if labels != "" {
 		var tmp map[string]any
 		if err := json.Unmarshal([]byte(labels), &tmp); err != nil {
-			return sql.ListParams{}, "", "", fmt.Errorf("invalid labels JSON: %w", err)
+			return sql.ListParams{}, fmt.Errorf("invalid labels JSON: %w", err)
 		}
 	}
 
@@ -262,37 +251,38 @@ func parseListParams(r *http.Request) (sql.ListParams, string, string, error) {
 	if v := q.Get("since"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
-			return sql.ListParams{}, "", "", fmt.Errorf("invalid since: must be RFC3339 timestamp")
+			return sql.ListParams{}, fmt.Errorf("invalid since: must be RFC3339 timestamp")
 		}
 		since = &t
 	}
 
 	cursor := sql.EncodedCursor(q.Get("cursor"))
 	if err := sql.ValidateCursor(cursor); err != nil {
-		return sql.ListParams{}, "", "", fmt.Errorf("invalid cursor: %w", err)
+		return sql.ListParams{}, fmt.Errorf("invalid cursor: %w", err)
 	}
 
 	p := sql.ListParams{
-		ResourceKind:  resourceKind,
-		Cluster:       q.Get("cluster"),
-		Namespace:     q.Get("namespace"),
-		CompositionID: compositionID,
-		Name:          q.Get("name"),
-		Labels:        labels,
-		Since:         since,
-		Raw:           q.Get("raw") == "true",
-		Limit:         limit,
-		Cursor:        cursor,
+		ResourceGroup:   group,
+		ResourceVersion: version,
+		ResourcePlural:  resource,
+		Cluster:         q.Get("cluster"),
+		Namespace:       q.Get("namespace"),
+		CompositionID:   compositionID,
+		Name:            q.Get("name"),
+		Labels:          labels,
+		Since:           since,
+		Raw:             q.Get("raw") == "true",
+		Limit:           limit,
+		Cursor:          cursor,
 	}
 
-	return p, group, resource, nil
+	return p, nil
 }
 
 // resourcesJSONPayload is the JSON body for POST /resources.
 type resourcesJSONPayload struct {
 	Group         string         `json:"group"`
 	Version       string         `json:"version"`
-	Kind          string         `json:"kind"`
 	Resource      string         `json:"resource"`
 	Cluster       string         `json:"cluster"`
 	Namespace     string         `json:"namespace"`
@@ -305,7 +295,7 @@ type resourcesJSONPayload struct {
 	Cursor        string         `json:"cursor"`
 }
 
-func parseListParamsJSON(r *http.Request) (sql.ListParams, string, string, error) {
+func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 	defer r.Body.Close()
 
 	var payload resourcesJSONPayload
@@ -314,23 +304,21 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, string, string, error
 
 	if err := dec.Decode(&payload); err != nil {
 		if err == io.EOF {
-			return sql.ListParams{}, "", "", fmt.Errorf("empty JSON body")
+			return sql.ListParams{}, fmt.Errorf("empty JSON body")
 		}
-		return sql.ListParams{}, "", "", fmt.Errorf("invalid JSON body: %w", err)
+		return sql.ListParams{}, fmt.Errorf("invalid JSON body: %w", err)
 	}
 
 	// Reject multiple JSON values.
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
-		return sql.ListParams{}, "", "", fmt.Errorf("invalid JSON body: multiple JSON values")
+		return sql.ListParams{}, fmt.Errorf("invalid JSON body: multiple JSON values")
 	}
 
-	// group, version, kind, resource are required.
-	if payload.Group == "" || payload.Version == "" || payload.Kind == "" || payload.Resource == "" {
-		return sql.ListParams{}, "", "", fmt.Errorf("fields 'group', 'version', 'kind', and 'resource' are all required")
+	// group, version, resource (plural) are required.
+	if payload.Group == "" || payload.Version == "" || payload.Resource == "" {
+		return sql.ListParams{}, fmt.Errorf("fields 'group', 'version', and 'resource' are all required")
 	}
-
-	resourceKind := buildResourceKind(payload.Group, payload.Version, payload.Kind)
 
 	limit := defaultLimit
 	if payload.Limit != nil {
@@ -344,14 +332,14 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, string, string, error
 	}
 
 	if payload.CompositionID != "" && !uuidRegex.MatchString(payload.CompositionID) {
-		return sql.ListParams{}, "", "", fmt.Errorf("invalid composition_id: not a valid UUID")
+		return sql.ListParams{}, fmt.Errorf("invalid composition_id: not a valid UUID")
 	}
 
 	var labels string
 	if payload.Labels != nil {
 		rawLabels, err := json.Marshal(payload.Labels)
 		if err != nil {
-			return sql.ListParams{}, "", "", fmt.Errorf("invalid labels JSON")
+			return sql.ListParams{}, fmt.Errorf("invalid labels JSON")
 		}
 		labels = string(rawLabels)
 	}
@@ -363,23 +351,25 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, string, string, error
 
 	cursor := sql.EncodedCursor(payload.Cursor)
 	if err := sql.ValidateCursor(cursor); err != nil {
-		return sql.ListParams{}, "", "", fmt.Errorf("invalid cursor: %w", err)
+		return sql.ListParams{}, fmt.Errorf("invalid cursor: %w", err)
 	}
 
 	p := sql.ListParams{
-		ResourceKind:  resourceKind,
-		Cluster:       payload.Cluster,
-		Namespace:     payload.Namespace,
-		CompositionID: payload.CompositionID,
-		Name:          payload.Name,
-		Labels:        labels,
-		Since:         payload.Since,
-		Raw:           raw,
-		Limit:         limit,
-		Cursor:        cursor,
+		ResourceGroup:   payload.Group,
+		ResourceVersion: payload.Version,
+		ResourcePlural:  payload.Resource,
+		Cluster:         payload.Cluster,
+		Namespace:       payload.Namespace,
+		CompositionID:   payload.CompositionID,
+		Name:            payload.Name,
+		Labels:          labels,
+		Since:           payload.Since,
+		Raw:             raw,
+		Limit:           limit,
+		Cursor:          cursor,
 	}
 
-	return p, payload.Group, payload.Resource, nil
+	return p, nil
 }
 
 func parseLimit(v string) (int, error) {

@@ -49,10 +49,7 @@ func BenchmarkCursorRoundtrip(b *testing.B) {
 // --- Builder benchmarks ---
 
 func BenchmarkBuildListQuery_Minimal(b *testing.B) {
-	p := ListParams{
-		ResourceKind: "apps/v1.Deployment",
-		Limit:        100,
-	}
+	p := deploymentParams(100)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		buildListQuery(p)
@@ -65,35 +62,19 @@ func BenchmarkBuildListQuery_AllFilters(b *testing.B) {
 		UpdatedAt: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
 		ID:        42,
 	})
-	p := ListParams{
-		ResourceKind:  "apps/v1.Deployment",
-		Cluster:       "cluster-a",
-		Namespace:     "prod",
-		CompositionID: "550e8400-e29b-41d4-a716-446655440000",
-		Name:          "api-service",
-		Labels:        `{"app":"nginx","tier":"backend"}`,
-		Since:         &since,
-		Raw:           true,
-		Limit:         100,
-		Cursor:        cursor,
-	}
+	p := deploymentParams(100)
+	p.Cluster = "cluster-a"
+	p.Namespace = "prod"
+	p.CompositionID = "550e8400-e29b-41d4-a716-446655440000"
+	p.Name = "api-service"
+	p.Labels = `{"app":"nginx","tier":"backend"}`
+	p.Since = &since
+	p.Raw = true
+	p.Cursor = cursor
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		buildListQuery(p)
-	}
-}
-
-// --- splitResourceKind benchmark ---
-
-func BenchmarkSplitResourceKind(b *testing.B) {
-	inputs := []string{
-		"apps/v1.Deployment",
-		"widgets.templates.krateo.io/v1beta1.Panel",
-		"composition.krateo.io/v1-2-2.GithubScaffoldingWithCompositionPage",
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		splitResourceKind(inputs[i%len(inputs)])
 	}
 }
 
@@ -122,7 +103,8 @@ func makeListResult(n int, includeRaw bool) *ListResult {
 		items[i] = ResourceItem{
 			Name:        fmt.Sprintf("resource-%04d", i),
 			Namespace:   "default",
-			APIVersion:  "apps/v1",
+			Group:       "apps",
+			Version:     "v1",
 			Kind:        "Deployment",
 			ClusterName: "cluster-a",
 			CreatedAt:   now,
@@ -175,11 +157,8 @@ func benchmarkListResources(b *testing.B, rowCount int, raw bool) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	created := now.Add(-24 * time.Hour)
 
-	params := ListParams{
-		ResourceKind: "apps/v1.Deployment",
-		Raw:          raw,
-		Limit:        rowCount + 1, // ensure no next-page logic triggers
-	}
+	params := deploymentParams(rowCount + 1) // ensure no next-page logic triggers
+	params.Raw = raw
 
 	cols := baseCols()
 	if raw {
@@ -198,21 +177,19 @@ func benchmarkListResources(b *testing.B, rowCount int, raw bool) {
 		for j := 0; j < rowCount; j++ {
 			updatedAt := now.Add(-time.Duration(j) * time.Second)
 			if raw {
-				rows.AddRow(
-					fmt.Sprintf("res-%04d", j), "default", "apps/v1.Deployment",
-					"cluster-a", created, updatedAt, nil, int64(1000-j),
-					[]byte(`{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"res","namespace":"default"}}`),
-				)
+				row := deploymentRow(fmt.Sprintf("res-%04d", j), "default", "cluster-a", created, updatedAt, nil, int64(1000-j))
+				row = append(row, []byte(`{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"res","namespace":"default"}}`))
+				rows.AddRows(row)
 			} else {
-				rows.AddRow(
-					fmt.Sprintf("res-%04d", j), "default", "apps/v1.Deployment",
-					"cluster-a", created, updatedAt, nil, int64(1000-j),
-				)
+				rows.AddRows(deploymentRow(
+					fmt.Sprintf("res-%04d", j), "default", "cluster-a",
+					created, updatedAt, nil, int64(1000-j),
+				))
 			}
 		}
 
 		mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-			WithArgs("apps/v1.Deployment", rowCount+2).
+			WithArgs(deploymentArgs(rowCount + 2)...).
 			WillReturnRows(rows)
 
 		b.StartTimer()
@@ -230,6 +207,3 @@ func BenchmarkListResources_1000rows(b *testing.B) { benchmarkListResources(b, 1
 func BenchmarkListResources_1000rows_raw(b *testing.B) {
 	benchmarkListResources(b, 1000, true)
 }
-
-// baseCols and rawCols are defined in resources_test.go, but we need them here.
-// Since both files are in the same package and test binary, they're shared.

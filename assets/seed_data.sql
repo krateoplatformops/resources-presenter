@@ -53,11 +53,14 @@ BEGIN
         );
 
         INSERT INTO krateo_resources
-          (updated_at, cluster_name, uid, global_uid, namespace, resource_kind, resource_name, raw)
+          (updated_at, cluster_name, uid, global_uid, namespace,
+           resource_group, resource_version, resource_kind, resource_plural,
+           resource_name, raw)
         VALUES
           (now() - (i || ' minutes')::INTERVAL,
            c, uid_val, c || ':' || uid_val, ns,
-           'widgets.templates.krateo.io/v1beta1.Panel', name_val, raw_val);
+           'widgets.templates.krateo.io', 'v1beta1', 'Panel', 'panels',
+           name_val, raw_val);
 
           i := i + 1;
         END LOOP;

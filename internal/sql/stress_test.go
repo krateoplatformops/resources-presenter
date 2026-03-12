@@ -26,20 +26,17 @@ func TestListResources_MaxLimit(t *testing.T) {
 	// Return exactly limit rows (no next page).
 	rows := pgxmock.NewRows(baseCols())
 	for i := 0; i < limit; i++ {
-		rows.AddRow(
-			fmt.Sprintf("res-%05d", i), "default", "apps/v1.Deployment",
-			"cluster-a", created, now.Add(-time.Duration(i)*time.Millisecond), nil, int64(limit-i),
-		)
+		rows.AddRows(deploymentRow(
+			fmt.Sprintf("res-%05d", i), "default", "cluster-a",
+			created, now.Add(-time.Duration(i)*time.Millisecond), nil, int64(limit-i),
+		))
 	}
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("apps/v1.Deployment", limit+1).
+		WithArgs(deploymentArgs(limit + 1)...).
 		WillReturnRows(rows)
 
-	params := ListParams{
-		ResourceKind: "apps/v1.Deployment",
-		Limit:        limit,
-	}
+	params := deploymentParams(limit)
 
 	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
@@ -72,20 +69,17 @@ func TestListResources_MaxLimitWithNextPage(t *testing.T) {
 	// Return limit+1 rows to trigger next-page cursor.
 	rows := pgxmock.NewRows(baseCols())
 	for i := 0; i < limit+1; i++ {
-		rows.AddRow(
-			fmt.Sprintf("res-%05d", i), "default", "apps/v1.Deployment",
-			"cluster-a", created, now.Add(-time.Duration(i)*time.Millisecond), nil, int64(limit+1-i),
-		)
+		rows.AddRows(deploymentRow(
+			fmt.Sprintf("res-%05d", i), "default", "cluster-a",
+			created, now.Add(-time.Duration(i)*time.Millisecond), nil, int64(limit+1-i),
+		))
 	}
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("apps/v1.Deployment", limit+1).
+		WithArgs(deploymentArgs(limit + 1)...).
 		WillReturnRows(rows)
 
-	params := ListParams{
-		ResourceKind: "apps/v1.Deployment",
-		Limit:        limit,
-	}
+	params := deploymentParams(limit)
 
 	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
@@ -138,18 +132,16 @@ func TestListResources_RawLargePayload(t *testing.T) {
 	}
 	rawJSON, _ := json.Marshal(rawObj)
 
-	rows := pgxmock.NewRows(rawCols()).
-		AddRow("big-resource", "default", "apps/v1.Deployment", "cluster-a", created, now, nil, int64(1), rawJSON)
+	row := deploymentRow("big-resource", "default", "cluster-a", created, now, nil, int64(1))
+	row = append(row, rawJSON)
+	rows := pgxmock.NewRows(rawCols()).AddRows(row)
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs("apps/v1.Deployment", 51).
+		WithArgs(deploymentArgs(51)...).
 		WillReturnRows(rows)
 
-	params := ListParams{
-		ResourceKind: "apps/v1.Deployment",
-		Raw:          true,
-		Limit:        50,
-	}
+	params := deploymentParams(50)
+	params.Raw = true
 
 	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
@@ -196,20 +188,17 @@ func TestListResources_ConcurrentAccess(t *testing.T) {
 			rowCount := 10 + (id % 20) // vary between 10–29 rows
 			rows := pgxmock.NewRows(baseCols())
 			for j := 0; j < rowCount; j++ {
-				rows.AddRow(
-					fmt.Sprintf("res-%d-%04d", id, j), "default", "apps/v1.Deployment",
-					"cluster-a", created, now.Add(-time.Duration(j)*time.Second), nil, int64(j+1),
-				)
+				rows.AddRows(deploymentRow(
+					fmt.Sprintf("res-%d-%04d", id, j), "default", "cluster-a",
+					created, now.Add(-time.Duration(j)*time.Second), nil, int64(j+1),
+				))
 			}
 
 			mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-				WithArgs("apps/v1.Deployment", 51).
+				WithArgs(deploymentArgs(51)...).
 				WillReturnRows(rows)
 
-			params := ListParams{
-				ResourceKind: "apps/v1.Deployment",
-				Limit:        50,
-			}
+			params := deploymentParams(50)
 
 			result, err := ListResources(context.Background(), mock, params)
 			if err != nil {
@@ -262,13 +251,10 @@ func TestBuildListQuery_AllFilterCombinations(t *testing.T) {
 
 	// Iterate over all 2^6 = 64 bitmask combinations.
 	for mask := 0; mask < (1 << len(filters)); mask++ {
-		p := ListParams{
-			ResourceKind: "apps/v1.Deployment",
-			Limit:        50,
-		}
+		p := deploymentParams(50)
 
 		var names []string
-		expectedArgs := 1 // resource_kind is always present
+		expectedArgs := 3 // group + version + plural are always present
 		for i, f := range filters {
 			if mask&(1<<i) != 0 {
 				f.apply(&p)
