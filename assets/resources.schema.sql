@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS krateo_resources (
     -- Cluster / object identity
     cluster_name      TEXT NOT NULL,
     uid               TEXT NOT NULL,
-    global_uid        TEXT NOT NULL, -- cluster_name:uid
+    global_uid        TEXT NOT NULL UNIQUE, -- cluster_name:uid
 
     namespace         TEXT NOT NULL,
 
@@ -33,11 +33,6 @@ CREATE TABLE IF NOT EXISTS krateo_resources (
 
     PRIMARY KEY (id)
 );
-
--- Enforce one current row per physical Kubernetes object.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_krateo_resources_global_uid
-ON krateo_resources (global_uid)
-WHERE deleted_at IS NULL;
 
 -- Fast keyset pagination by GVR (group + version + kind).
 CREATE INDEX IF NOT EXISTS idx_krateo_resources_gvr_page

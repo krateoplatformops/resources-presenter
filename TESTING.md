@@ -81,7 +81,7 @@ kubectl exec -n krateo-system deploy/postgres -- \
   psql -U krateo -d krateo -c "SELECT cluster_name, namespace, resource_group, resource_version, resource_kind, resource_plural, resource_name FROM krateo_resources LIMIT 20;"
 ```
 
-Expected output: a table of 500 rows with various cluster/namespace/kind combinations.
+Expected output: a sample of the seeded resources.
 
 
 ### 3.4 Build and load the service image
@@ -278,13 +278,12 @@ curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&versi
 
 # RBAC denied (namespace the user has no access to) → 403
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=kube-system' | jq
-
-# Namespace and resource for which the user has no permissions → 403
-curl -s -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=demo-system' | jq
-```
 
+# Namespace does not exist → 403 (due to the RBAC check, which is done before verifying namespace existence, better than 404 to avoid info leak about which namespaces exist)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=nonexistent' | jq
+```
 
 Stop port-forwarding:
 
