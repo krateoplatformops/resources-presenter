@@ -106,6 +106,7 @@ func makeListResult(n int, includeRaw bool) *ListResult {
 			Group:       "apps",
 			Version:     "v1",
 			Kind:        "Deployment",
+			Resource:    "deployments",
 			ClusterName: "cluster-a",
 			CreatedAt:   now,
 			UpdatedAt:   now,

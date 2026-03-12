@@ -38,6 +38,7 @@ type ResourceItem struct {
 	Group         string    `json:"group"`
 	Version       string    `json:"version"`
 	Kind          string    `json:"kind"`
+	Resource      string    `json:"resource"`
 	ClusterName   string    `json:"cluster_name"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
@@ -84,6 +85,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 			resourceGroup   string
 			resourceVersion string
 			resourceKind    string
+			resourcePlural  string
 			clusterName     string
 			createdAt       time.Time
 			updatedAt       time.Time
@@ -94,7 +96,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 
 		scanDest := []any{
 			&resourceName, &namespace,
-			&resourceGroup, &resourceVersion, &resourceKind,
+			&resourceGroup, &resourceVersion, &resourceKind, &resourcePlural,
 			&clusterName, &createdAt, &updatedAt, &compositionID,
 			&id,
 		}
@@ -112,6 +114,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 			Group:         resourceGroup,
 			Version:       resourceVersion,
 			Kind:          resourceKind,
+			Resource:      resourcePlural,
 			ClusterName:   clusterName,
 			CreatedAt:     createdAt,
 			UpdatedAt:     updatedAt,
@@ -205,7 +208,7 @@ func buildListQuery(p ListParams) (string, []any, error) {
 	b.Limit(p.Limit + 1)
 
 	// Columns
-	cols := "resource_name, namespace, resource_group, resource_version, resource_kind, cluster_name, created_at, updated_at, composition_id, id"
+	cols := "resource_name, namespace, resource_group, resource_version, resource_kind, resource_plural, cluster_name, created_at, updated_at, composition_id, id"
 	if p.Raw {
 		cols += ", raw"
 	}
