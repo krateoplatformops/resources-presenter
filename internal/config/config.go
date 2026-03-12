@@ -29,9 +29,6 @@ type Config struct {
 	SigningKey string
 	// AuthnNS is the Kubernetes namespace where user clientconfig secrets are stored.
 	AuthnNS string
-
-	KubernetesServiceHost string
-	KubernetesServicePort string
 }
 
 func Setup() *Config {
@@ -91,16 +88,6 @@ func Setup() *Config {
 		"Kubernetes namespace where user clientconfig secrets are stored",
 	)
 
-	//cfgKubernetesServiceHost := flag.String("kubernetes-service-host",
-	//	env.String("KUBERNETES_SERVICE_HOST", ""),
-	//	"Kubernetes service host",
-	//)
-
-	//cfgKubernetesServicePort := flag.String("kubernetes-service-port",
-	//	env.String("KUBERNETES_SERVICE_PORT", ""),
-	//	"Kubernetes service port",
-	//)
-
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Flags:")
 		flag.PrintDefaults()
@@ -113,8 +100,6 @@ func Setup() *Config {
 	cfg.DbReadyTimeout = *cfgDbReadyTimeout
 	cfg.SigningKey = *cfgSignKey
 	cfg.AuthnNS = *cfgAuthnNS
-	//cfg.KubernetesServiceHost = *cfgKubernetesServiceHost
-	//cfg.KubernetesServicePort = *cfgKubernetesServicePort
 
 	cfg.Log = logutil.New(serviceName, cfg.Debug)
 
