@@ -197,7 +197,7 @@ curl -v -s http://localhost:8080/livez
 curl -v -s http://localhost:8080/readyz
 ```
 
-**List Panels** (should return 200 with items):
+**List Panels** (should return status code 200 with items):
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
