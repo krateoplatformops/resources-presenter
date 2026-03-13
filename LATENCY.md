@@ -1,5 +1,7 @@
 # Latency Breakdown
 
+TODO: to be rewritten
+
 ## Middleware chain
 
 Every request passes through this middleware chain before reaching the handler:

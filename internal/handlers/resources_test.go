@@ -26,15 +26,15 @@ import (
 // allowAllAuthorizer always allows access (used by most tests).
 type allowAllAuthorizer struct{}
 
-func (allowAllAuthorizer) CanGet(ctx context.Context, group, resource, namespace string) bool {
-	return true
+func (allowAllAuthorizer) FilterAllowed(ctx context.Context, targets []sqlpkg.ResourceTarget) []sqlpkg.ResourceTarget {
+	return targets
 }
 
 // denyAllAuthorizer always denies access (used by RBAC denial tests).
 type denyAllAuthorizer struct{}
 
-func (denyAllAuthorizer) CanGet(ctx context.Context, group, resource, namespace string) bool {
-	return false
+func (denyAllAuthorizer) FilterAllowed(ctx context.Context, targets []sqlpkg.ResourceTarget) []sqlpkg.ResourceTarget {
+	return nil
 }
 
 // testLogger returns a discard logger for tests.

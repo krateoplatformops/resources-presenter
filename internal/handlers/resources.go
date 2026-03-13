@@ -26,22 +26,30 @@ const (
 // uuidRegex validates UUID format (RFC 4122).
 var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// Authorizer checks whether the current user is allowed to GET a specific
-// resource type in a given namespace.
+// Authorizer checks whether the current user is allowed to GET resources.
+// It receives a list of discovered (group, resource, namespace) targets and
+// returns only the targets the user is permitted to access.
 type Authorizer interface {
-	CanGet(ctx context.Context, group, resource, namespace string) bool
+	FilterAllowed(ctx context.Context, targets []sql.ResourceTarget) []sql.ResourceTarget
 }
 
 // ResourcesHandler returns an HTTP handler for GET/POST /resources.
-// The resource type is identified by query parameters: group, version, resource (plural).
-//   - group    → API group (e.g. "apps", "widgets.templates.krateo.io")
-//   - version  → API version (e.g. "v1", "v1beta1")
-//   - resource → K8s plural resource name (e.g. "panels", "deployments")
+// The resource type is identified by query parameters:
+//   - group    → API group (required, e.g. "apps", "widgets.templates.krateo.io")
+//   - version  → API version (optional, e.g. "v1", "v1beta1")
+//   - resource → K8s plural resource name (optional, e.g. "panels", "deployments")
 //
 // GET uses query parameters; POST uses a JSON body with the same fields.
 //
+// The handler flow:
+//  1. Parse and validate request parameters
+//  2. Discovery: find distinct (group, resource, namespace) tuples in the DB
+//  3. RBAC: batch-check permissions, keep only allowed targets
+//  4. Query: list resources filtered to allowed targets
+//  5. Serialize and return response
+//
 // Design decision: an empty result set returns 200 with an empty items array,
-// not 404. This is consistent with Kubernetes LIST semantics — the resource kind
+// not 404. This is consistent with Kubernetes LIST semantics: the resource kind
 // is valid, there are just no instances matching the filters.
 func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -56,9 +64,9 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 		// The Access middleware (use.Access) wraps the entire chain and logs its
 		// own "latency" field, which DOES include middleware time. Therefore:
 		//
-		//   Access.latency  =  UserConfig time  +  handler 5_total time
+		//   Access.latency  =  UserConfig time  +  handler 6_total time
 		//
-		// The gap between Access.latency and 5_total is the UserConfig middleware.
+		// The gap between Access.latency and 6_total is the UserConfig middleware.
 		totalStart := time.Now()
 
 		ctx := xcontext.BuildContext(r.Context())
@@ -66,14 +74,15 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 
 		// Per-request state for the deferred log.
 		var (
-			gvr           string
-			statusCode    int
-			rowsReturned  int
-			parseDuration time.Duration
-			rbacDuration  time.Duration
-			queryDuration time.Duration
-			serDuration   time.Duration
-			queryErr      error
+			gvr              string
+			statusCode       int
+			rowsReturned     int
+			parseDuration    time.Duration
+			discoverDuration time.Duration
+			rbacDuration     time.Duration
+			queryDuration    time.Duration
+			serDuration      time.Duration
+			queryErr         error
 		)
 
 		// Every request gets logged in detail, then there is also the higher-level access log due to the middleware.
@@ -95,10 +104,11 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 				slog.Int("rows_returned", rowsReturned),
 				slog.Group("handler_duration_ms",
 					slog.Float64("1_parse", float64(parseDuration.Microseconds())/1000.0),
-					slog.Float64("2_rbac_authz", float64(rbacDuration.Microseconds())/1000.0),
-					slog.Float64("3_query", float64(queryDuration.Microseconds())/1000.0),
-					slog.Float64("4_serialize", float64(serDuration.Microseconds())/1000.0),
-					slog.Float64("5_total", float64(totalDuration.Microseconds())/1000.0),
+					slog.Float64("2_discovery", float64(discoverDuration.Microseconds())/1000.0),
+					slog.Float64("3_rbac_authz", float64(rbacDuration.Microseconds())/1000.0),
+					slog.Float64("4_query", float64(queryDuration.Microseconds())/1000.0),
+					slog.Float64("5_serialize", float64(serDuration.Microseconds())/1000.0),
+					slog.Float64("6_total", float64(totalDuration.Microseconds())/1000.0),
 				),
 			}
 			if queryErr != nil {
@@ -121,8 +131,16 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 
 		params, parseErr := parseRequest(r)
 		parseDuration = time.Since(parseStart)
-		if params.ResourcePlural != "" {
-			gvr = params.ResourceGroup + "/" + params.ResourceVersion + "." + params.ResourcePlural
+
+		// Build GVR string for logging (use available fields).
+		if params.ResourceGroup != "" {
+			gvr = params.ResourceGroup
+			if params.ResourceVersion != "" {
+				gvr += "/" + params.ResourceVersion
+			}
+			if params.ResourcePlural != "" {
+				gvr += "." + params.ResourcePlural
+			}
 		}
 
 		if parseErr != nil {
@@ -131,22 +149,58 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 			return
 		}
 
-		// --- Phase 2: RBAC authorization ---
-		rbacStart := time.Now()
-
-		if !auth.CanGet(r.Context(), params.ResourceGroup, params.ResourcePlural, params.Namespace) {
-			rbacDuration = time.Since(rbacStart)
-			statusCode = http.StatusForbidden
-			response.Encode(w, response.New(http.StatusForbidden, fmt.Errorf("forbidden: insufficient permissions")))
-			return
-		}
-		rbacDuration = time.Since(rbacStart)
-
-		// --- Phase 3: DB query execution ---
-		queryStart := time.Now()
+		// --- Phase 2: Discovery ---
+		// Find distinct (group, resource, namespace) tuples matching the
+		// request filters. These are the targets we need to RBAC-check.
+		discoverStart := time.Now()
 
 		queryCtx, queryCancel := context.WithTimeout(r.Context(), queryTimeout)
 		defer queryCancel()
+
+		discovered, err := sql.DiscoverTargets(queryCtx, db, params.ListParams)
+		discoverDuration = time.Since(discoverStart)
+		if err != nil {
+			log.Debug("discovery error", slog.Any("err", err), slog.String("trace_id", traceId))
+			queryErr = err
+			statusCode = http.StatusInternalServerError
+			response.InternalError(w, fmt.Errorf("internal server error"))
+			return
+		}
+
+		// No matching resources exist — return empty result (not 404).
+		if len(discovered) == 0 {
+			log.Debug("discovery found no targets", slog.String("gvr", gvr), slog.String("trace_id", traceId))
+			statusCode = http.StatusOK
+			emptyResult := &sql.ListResult{Count: 0, Items: []sql.ResourceItem{}}
+			data, _ := json.Marshal(emptyResult)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(data)
+			return
+		} else {
+			log.Debug("discovery found targets", slog.Int("count", len(discovered)), slog.String("gvr", gvr), slog.String("trace_id", traceId))
+		}
+
+		// --- Phase 3: RBAC authorization (batch) ---
+		rbacStart := time.Now()
+
+		allowed := auth.FilterAllowed(r.Context(), discovered)
+		rbacDuration = time.Since(rbacStart)
+
+		if len(allowed) == 0 {
+			log.Debug("RBAC filter excluded all targets", slog.String("gvr", gvr), slog.String("trace_id", traceId))
+			statusCode = http.StatusForbidden
+			response.Encode(w, response.New(http.StatusForbidden, fmt.Errorf("forbidden: insufficient permissions")))
+			return
+		} else {
+			log.Debug("RBAC filter allowed some targets", slog.Int("allowed_count", len(allowed)), slog.Int("discovered_count", len(discovered)), slog.String("gvr", gvr), slog.String("trace_id", traceId))
+		}
+
+		// Inject allowed targets into params for the list query.
+		params.AllowedTargets = allowed
+
+		// --- Phase 4: DB query execution ---
+		queryStart := time.Now()
 
 		result, err := sql.ListResources(queryCtx, db, params.ListParams)
 		queryDuration = time.Since(queryStart)
@@ -157,7 +211,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 			return
 		}
 
-		// --- Phase 4: Response serialization ---
+		// --- Phase 5: Response serialization ---
 		// Pre-marshal to a buffer to avoid committing a 200 status with a
 		// truncated body if serialization fails partway through.
 		serializeStart := time.Now()
@@ -176,7 +230,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write(data); err != nil {
-			log.Debug("client write error", slog.Any("err", err))
+			log.Debug("client write error", slog.Any("err", err), slog.String("trace_id", traceId))
 		}
 
 		serDuration = time.Since(serializeStart)
@@ -197,8 +251,8 @@ type handlerParams struct {
 }
 
 // parseRequest validates the request and extracts params from query string (GET) or JSON body (POST).
-// The resource type is identified by required query/body params: group, version, resource (plural).
-// Namespace is required for RBAC authorization.
+// The resource type is identified by the required group parameter; version, resource, and namespace
+// are optional filters used to narrow the discovery query and subsequent RBAC checks.
 func parseRequest(r *http.Request) (handlerParams, *handlerError) {
 	var (
 		params sql.ListParams
@@ -219,27 +273,20 @@ func parseRequest(r *http.Request) (handlerParams, *handlerError) {
 		}
 	}
 
-	// Namespace is required for RBAC authorization. At least for now
-	if params.Namespace == "" {
-		return handlerParams{ListParams: params}, &handlerError{
-			status: http.StatusBadRequest,
-			msg:    "query parameter 'namespace' is required",
-		}
-	}
-
 	return handlerParams{ListParams: params}, nil
 }
 
 func parseListParams(r *http.Request) (sql.ListParams, error) {
 	q := r.URL.Query()
 
-	// group, version, resource (plural) are required to identify the resource type.
+	// group is required; version, resource, namespace are optional filters.
 	group := q.Get("group")
+	if group == "" {
+		return sql.ListParams{}, fmt.Errorf("query parameter 'group' is required")
+	}
+
 	version := q.Get("version")
 	resource := q.Get("resource")
-	if group == "" || version == "" || resource == "" {
-		return sql.ListParams{}, fmt.Errorf("query parameters 'group', 'version', and 'resource' are all required")
-	}
 
 	limit, err := parseLimit(q.Get("limit"))
 	if err != nil {
@@ -329,9 +376,9 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 		return sql.ListParams{}, fmt.Errorf("invalid JSON body: multiple JSON values")
 	}
 
-	// group, version, resource (plural) are required.
-	if payload.Group == "" || payload.Version == "" || payload.Resource == "" {
-		return sql.ListParams{}, fmt.Errorf("fields 'group', 'version', and 'resource' are all required")
+	// group is required; version and resource are optional filters.
+	if payload.Group == "" {
+		return sql.ListParams{}, fmt.Errorf("field 'group' is required")
 	}
 
 	limit := defaultLimit
