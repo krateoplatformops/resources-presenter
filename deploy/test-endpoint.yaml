@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Secret
+type: Opaque
+metadata:
+  name: resources-presenter-endpoint
+  namespace: krateo-system
+stringData:
+  server-url: http://resources-presenter.krateo-system.svc:8085
+  insecure: "true"
