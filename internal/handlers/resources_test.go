@@ -277,52 +277,21 @@ func TestResourcesRawFlag(t *testing.T) {
 	}
 }
 
-// --- Integration test: missing group/version/resource returns 400 ---
+// --- Integration test: missing group returns 400 ---
 
-func TestResourcesMissingKind(t *testing.T) {
+func TestResourcesMissingGroup(t *testing.T) {
 	db, cleanup := setupTestPostgres(t)
 	defer cleanup()
 
 	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
-	// No group/version/resource at all.
+	// No params at all — group is required.
 	req := httptest.NewRequest("GET", "/resources", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	// Only group, missing version and resource.
-	req = httptest.NewRequest("GET", "/resources?group=apps", nil)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
-	}
-}
-
-// --- Integration test: missing namespace returns 400 ---
-
-func TestResourcesMissingNamespace(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
-
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
-
-	// Valid group/version/resource but no namespace.
-	req := httptest.NewRequest("GET", "/resources?group=apps&version=v1&resource=deployments", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for missing namespace, got %d: %s", rec.Code, rec.Body.String())
-	}
-
-	if !strings.Contains(rec.Body.String(), "namespace") {
-		t.Fatalf("expected error message to mention namespace, got: %s", rec.Body.String())
 	}
 }
 
@@ -331,6 +300,23 @@ func TestResourcesMissingNamespace(t *testing.T) {
 func TestResourcesRBACDenied(t *testing.T) {
 	db, cleanup := setupTestPostgres(t)
 	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	// Seed resources so discovery finds targets before RBAC check.
+	seedResources(t, db, seedOptions{
+		Cluster:         "cluster-a",
+		Namespace:       "default",
+		ResourceGroup:   "apps",
+		ResourceVersion: "v1",
+		ResourceKind:    "Deployment",
+		ResourcePlural:  "deployments",
+		Count:           3,
+		StartTime:       now,
+		Delta:           time.Second,
+	})
 
 	handler := ResourcesHandler(db, testLogger(), denyAllAuthorizer{})
 
@@ -677,18 +663,13 @@ func TestResourcesPOST_ValidationErrors(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "missing group/version/resource returns 400",
+			name:       "missing group returns 400",
 			body:       `{"cluster":"a","namespace":"default"}`,
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "invalid cursor returns 400",
 			body:       `{"group":"apps","version":"v1","resource":"deployments","namespace":"default","cursor":"!!!not-base64!!!"}`,
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name:       "missing namespace returns 400",
-			body:       `{"group":"apps","version":"v1","resource":"deployments"}`,
 			wantStatus: http.StatusBadRequest,
 		},
 	}
@@ -760,24 +741,25 @@ func TestParseRequest(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "missing version returns 400",
-			url:        "/resources?group=apps&resource=deployments&namespace=default",
-			wantStatus: http.StatusBadRequest,
-		},
-		{
-			name:       "missing resource returns 400",
-			url:        "/resources?group=apps&version=v1&namespace=default",
-			wantStatus: http.StatusBadRequest,
-		},
-		{
 			name:       "empty params returns 400",
 			url:        "/resources",
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "missing namespace returns 400",
-			url:        "/resources?group=apps&version=v1&resource=deployments",
-			wantStatus: http.StatusBadRequest,
+			name:       "group only is valid",
+			url:        "/resources?group=apps",
+			wantGroup:  "apps",
+		},
+		{
+			name:       "group + version is valid",
+			url:        "/resources?group=apps&version=v1",
+			wantGroup:  "apps",
+		},
+		{
+			name:       "group + resource is valid",
+			url:        "/resources?group=apps&resource=deployments",
+			wantGroup:  "apps",
+			wantPlural: "deployments",
 		},
 		{
 			name:       "query params parsed correctly",
@@ -987,30 +969,20 @@ func TestParseListParamsJSON_MultipleValues(t *testing.T) {
 	}
 }
 
-func TestParseListParamsJSON_MissingResource(t *testing.T) {
-	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","namespace":"default"}`))
-	_, err := parseListParamsJSON(req)
-	if err == nil {
-		t.Fatal("expected error for missing resource")
+func TestParseListParamsJSON_GroupOnly(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps"}`))
+	got, err := parseListParamsJSON(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-}
-
-// --- Integration test: POST missing namespace returns 400 ---
-
-func TestResourcesPOST_MissingNamespace(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
-
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
-
-	body := `{"group":"apps","version":"v1","resource":"deployments"}`
-	req := httptest.NewRequest("POST", "/resources", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for missing namespace in POST, got %d: %s", rec.Code, rec.Body.String())
+	if got.ResourceGroup != "apps" {
+		t.Fatalf("expected group=apps, got %q", got.ResourceGroup)
+	}
+	if got.ResourceVersion != "" {
+		t.Fatalf("expected empty version, got %q", got.ResourceVersion)
+	}
+	if got.ResourcePlural != "" {
+		t.Fatalf("expected empty plural, got %q", got.ResourcePlural)
 	}
 }
 
@@ -1019,6 +991,23 @@ func TestResourcesPOST_MissingNamespace(t *testing.T) {
 func TestResourcesPOST_RBACDenied(t *testing.T) {
 	db, cleanup := setupTestPostgres(t)
 	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	// Seed resources so discovery finds targets before RBAC check.
+	seedResources(t, db, seedOptions{
+		Cluster:         "cluster-a",
+		Namespace:       "default",
+		ResourceGroup:   "apps",
+		ResourceVersion: "v1",
+		ResourceKind:    "Deployment",
+		ResourcePlural:  "deployments",
+		Count:           3,
+		StartTime:       now,
+		Delta:           time.Second,
+	})
 
 	handler := ResourcesHandler(db, testLogger(), denyAllAuthorizer{})
 

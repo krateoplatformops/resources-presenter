@@ -16,27 +16,27 @@ Use `raw=true` to also include the full Kubernetes object under the `raw` field.
 
 ## Resource Resolution
 
-The resource type is identified by three **required** parameters:
+The resource type is identified by the **required** `group` parameter, plus optional narrowing filters:
 
-| Parameter | Example | Description |
-| --- | --- | --- |
-| `group` | `apps`, `widgets.templates.krateo.io` | Kubernetes API group |
-| `version` | `v1`, `v1beta1` | API version |
-| `resource` | `deployments`, `panels` | Resource plural name (lowercase) |
+| Parameter | Example | Required? | Description |
+| --- | --- | --- | --- |
+| `group` | `apps`, `widgets.templates.krateo.io` | **Yes** | Kubernetes API group |
+| `version` | `v1`, `v1beta1` | No | API version (narrows discovery) |
+| `resource` | `deployments`, `panels` | No | Resource plural name (lowercase, narrows discovery) |
 
 These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural`.
 
-Missing any of the three returns `400`.
+When `version` or `resource` are omitted, the handler discovers all matching resources within the group and RBAC-filters them before querying. Missing `group` returns `400`.
 
 ## Query Parameters
 
-All filters (except `group`, `version`, `resource`) are optional and are combined with `AND`.
+All filters (except `group`) are optional and are combined with `AND`.
 
 | Parameter | Type | Behavior |
 | --- | --- | --- |
 | `group` | string | **Required.** API group. |
-| `version` | string | **Required.** API version. |
-| `resource` | string | **Required.** Resource plural name (lowercase). |
+| `version` | string | Optional. API version (narrows discovery). |
+| `resource` | string | Optional. Resource plural name (lowercase, narrows discovery). |
 | `cluster` | string | Exact match on `cluster_name`. |
 | `namespace` | string | Exact match on `namespace`. |
 | `composition_id` | UUID | Exact match on `composition_id`. Must be a valid RFC 4122 UUID. |
@@ -77,7 +77,7 @@ Example body:
 
 Notes:
 
-- `group`, `version`, and `resource` are **required** in the JSON body too.
+- `group` is **required** in the JSON body; `version` and `resource` are optional.
 - Unknown JSON fields return `400`.
 - Empty body returns `400`.
 - `limit` defaults to `100` when omitted or `<= 0`.
@@ -351,6 +351,7 @@ Errors are returned as Kubernetes-style `Status` objects:
 
 | Status Code | Condition |
 | --- | --- |
-| `400` | Invalid or missing parameters (missing group/version/resource, bad UUID, JSON, timestamp, limit, cursor) |
+| `400` | Invalid or missing parameters (missing group, bad UUID, JSON, timestamp, limit, cursor) |
+| `403` | Forbidden — RBAC denied access to all discovered resources |
 | `405` | Method not allowed (only GET and POST are supported) |
 | `500` | Internal server error (database failure, serialization error) |

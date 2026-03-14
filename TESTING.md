@@ -269,9 +269,9 @@ curl -s -X POST http://localhost:8080/resources \
 **Expected error cases:**
 
 ```bash
-# Missing namespace → 400
+# Missing group → 400
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels' | jq
+  'http://localhost:8080/resources?version=v1beta1&resource=panels&namespace=krateo-system' | jq
 
 # Missing auth header → 401
 curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system' | jq
@@ -280,9 +280,13 @@ curl -s 'http://localhost:8080/resources?group=widgets.templates.krateo.io&versi
 curl -s -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=demo-system' | jq
 
-# Namespace does not exist → 403 (due to the RBAC check, which is done before verifying namespace existence, better than 404 to avoid info leak about which namespaces exist)
+# Namespace does not exist → 200 empty result (no resources discovered)
 curl -s -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=nonexistent' | jq
+
+# Group only (no version/resource) → valid, returns all resources in the group the user can access
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io' | jq
 ```
 
 Stop port-forwarding:
@@ -334,8 +338,8 @@ Benchmarks live in `internal/sql/bench_test.go` and measure the hot paths of the
 | `BenchmarkCursorEncode` | Encoding a keyset cursor to base64 |
 | `BenchmarkCursorDecode` | Decoding a base64 cursor back to struct |
 | `BenchmarkCursorRoundtrip` | Full encode + decode cycle |
-| `BenchmarkBuildListQuery_Minimal` | SQL builder with required filters only (group, version, plural) |
-| `BenchmarkBuildListQuery_AllFilters` | SQL builder with all 7 filters + cursor active |
+| `BenchmarkBuildListQuery_Minimal` | SQL builder with required filters only (group, version, AllowedTargets IN clause) |
+| `BenchmarkBuildListQuery_AllFilters` | SQL builder with all 6 filters + cursor active |
 | `BenchmarkEscapeLIKE` | Escaping LIKE special characters |
 | `BenchmarkJSONMarshal_10/100/1000` | Serializing result sets of varying sizes |
 | `BenchmarkJSONMarshal_1000_WithRaw` | Serializing 1000 items including raw JSONB |
@@ -410,7 +414,7 @@ Stress tests live in `internal/sql/stress_test.go` and verify correctness under 
 | `TestListResources_MaxLimitWithNextPage` | Cursor is correctly set when 5001 rows exist |
 | `TestListResources_RawLargePayload` | Handling of ~50KB raw JSONB objects |
 | `TestListResources_ConcurrentAccess` | 50 goroutines querying simultaneously (race safety) |
-| `TestBuildListQuery_AllFilterCombinations` | All 64 combinations of 6 optional filters |
+| `TestBuildListQuery_AllFilterCombinations` | All 32 combinations of 5 optional filters |
 | `TestEscapeLIKE` | LIKE special character escaping (`%`, `_`, `\`) |
 
 ### Running stress tests

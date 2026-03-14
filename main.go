@@ -59,6 +59,7 @@ func main() {
 			AllowCredentials: true,
 			MaxAge:           300,
 		}),
+		handlers.Gzip(),
 	)
 
 	// Authenticated routes: append use.UserConfig so the handler can extract

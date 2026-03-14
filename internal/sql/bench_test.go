@@ -49,7 +49,7 @@ func BenchmarkCursorRoundtrip(b *testing.B) {
 // --- Builder benchmarks ---
 
 func BenchmarkBuildListQuery_Minimal(b *testing.B) {
-	p := deploymentParams(100)
+	p := deploymentParams("default", 100)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		buildListQuery(p)
@@ -62,9 +62,8 @@ func BenchmarkBuildListQuery_AllFilters(b *testing.B) {
 		UpdatedAt: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
 		ID:        42,
 	})
-	p := deploymentParams(100)
+	p := deploymentParams("prod", 100)
 	p.Cluster = "cluster-a"
-	p.Namespace = "prod"
 	p.CompositionID = "550e8400-e29b-41d4-a716-446655440000"
 	p.Name = "api-service"
 	p.Labels = `{"app":"nginx","tier":"backend"}`
@@ -158,7 +157,7 @@ func benchmarkListResources(b *testing.B, rowCount int, raw bool) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	created := now.Add(-24 * time.Hour)
 
-	params := deploymentParams(rowCount + 1) // ensure no next-page logic triggers
+	params := deploymentParams("default", rowCount+1) // ensure no next-page logic triggers
 	params.Raw = raw
 
 	cols := baseCols()
@@ -190,7 +189,7 @@ func benchmarkListResources(b *testing.B, rowCount int, raw bool) {
 		}
 
 		mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-			WithArgs(deploymentArgs(rowCount + 2)...).
+			WithArgs(deploymentArgs("default", rowCount+2)...).
 			WillReturnRows(rows)
 
 		b.StartTimer()

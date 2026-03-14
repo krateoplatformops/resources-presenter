@@ -89,7 +89,7 @@ func DiscoverTargets(ctx context.Context, db Querier, p ListParams) ([]ResourceT
 	if p.ResourcePlural != "" {
 		b.Where("resource_plural = ?", p.ResourcePlural)
 	}
-	b.WhereRaw("deleted_at IS NULL")
+	b.Where("deleted_at IS NULL")
 	if p.Cluster != "" {
 		b.Where("cluster_name = ?", p.Cluster)
 	}
@@ -247,7 +247,7 @@ func buildListQuery(p ListParams) (string, []any, error) {
 	}
 
 	// Soft-delete filter: only return active rows.
-	b.WhereRaw("deleted_at IS NULL")
+	b.Where("deleted_at IS NULL")
 
 	if p.Cluster != "" {
 		b.Where("cluster_name = ?", p.Cluster)

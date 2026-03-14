@@ -10,21 +10,21 @@ Key features:
 
 - **GET and POST** query support with filter capabilities
 - **Keyset pagination** (`updated_at DESC, id DESC`) for stable, efficient paging
-- **Dynamic resource resolution** via `group`, `version`, and `resource` query parameters — no static registry needed
+- **Dynamic resource resolution** via `group` (required) plus optional `version` and `resource` filters — discovery-based, no static registry needed
 - **JSONB label filtering** via PostgreSQL containment (`@>`)
-- **RBAC enforcement**
-- **Structured latency logging** for every request (parse, rbac, query, serialize phases)
+- **Batch RBAC enforcement** via discovery → `rbac.UserCan()` batch check → filtered query
+- **Structured latency logging** for every request (parse, discovery, rbac, query, serialize phases)
 
 ## API
 
 ### Endpoint
 
 ```
-GET  /resources?group=<group>&version=<version>&resource=<resource>&namespace=<namespace>
+GET  /resources?group=<group>[&version=<version>][&resource=<resource>][&namespace=<namespace>]
 POST /resources
 ```
 
-The resource type is identified by three **required** parameters: `group`, `version`, and `resource`. These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural` in the `krateo_resources` table.
+The resource type is identified by the **required** `group` parameter. `version` and `resource` are optional filters that narrow the discovery query. These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural` in the `krateo_resources` table.
 
 ### Filters
 
@@ -33,8 +33,8 @@ All filters are optional and combined with `AND`.
 | Parameter | Type | Behavior |
 | --- | --- | --- |
 | `group` | string | **Required.** API group (e.g. `apps`, `widgets.templates.krateo.io`) |
-| `version` | string | **Required.** API version (e.g. `v1`, `v1beta1`) |
-| `resource` | string | **Required.** Resource plural name (e.g. `deployments`, `panels`). Lowercase. |
+| `version` | string | Optional. API version (e.g. `v1`, `v1beta1`). Narrows discovery. |
+| `resource` | string | Optional. Resource plural name (e.g. `deployments`, `panels`). Lowercase. Narrows discovery. |
 | `cluster` | string | Exact match on `cluster_name` |
 | `namespace` | string | Exact match on `namespace` |
 | `composition_id` | UUID | Exact match on `composition_id` |
@@ -45,7 +45,7 @@ All filters are optional and combined with `AND`.
 | `limit` | integer | Page size (default: `100`, max: `5000`) |
 | `cursor` | base64 | Opaque keyset cursor from previous response |
 
-GET uses query parameters. POST uses the same fields as a JSON body (with `labels` as a JSON object, not a string). Note: `kind` is not a query parameter — the `resource` (plural) field is used for filtering.
+GET uses query parameters. POST uses the same fields as a JSON body (with `labels` as a JSON object, not a string). Note: `kind` is not a query parameter — the `resource` (plural) field is used for filtering. Only `group` is required; all other fields are optional.
 
 ### Response
 
@@ -79,7 +79,8 @@ Kubernetes-style `Status` objects:
 
 | Code | Condition |
 | --- | --- |
-| `400` | Invalid/missing parameters (missing group/version/resource, bad UUID, JSON, timestamp, cursor) |
+| `400` | Invalid/missing parameters (missing group, bad UUID, JSON, timestamp, cursor) |
+| `403` | Forbidden — RBAC denied access to all discovered resources |
 | `405` | Method not allowed |
 | `500` | Internal server error |
 
