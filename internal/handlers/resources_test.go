@@ -333,9 +333,9 @@ func TestResourcesRBACDenied(t *testing.T) {
 	}
 }
 
-// --- Integration test: name search (case-insensitive partial match) ---
+// --- Integration test: name_contains search (case-insensitive partial match) ---
 
-func TestResourcesFilter_Name(t *testing.T) {
+func TestResourcesFilter_NameContains(t *testing.T) {
 	db, cleanup := setupTestPostgres(t)
 	defer cleanup()
 
@@ -365,32 +365,114 @@ func TestResourcesFilter_Name(t *testing.T) {
 
 	// Search for "api" — should match "my-api-service", "api-gateway", "API-v2" (case-insensitive).
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
-		"name":      "api",
-		"namespace": "prod",
+		"name_contains": "api",
+		"namespace":     "prod",
 	})
 	items := extractItems(t, resp)
 	if len(items) != 3 {
-		t.Fatalf("name filter 'api': expected 3 items, got %d", len(items))
+		t.Fatalf("name_contains filter 'api': expected 3 items, got %d", len(items))
 	}
 
 	// Search for "frontend" — should match only "frontend-app".
 	resp = callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
-		"name":      "frontend",
-		"namespace": "prod",
+		"name_contains": "frontend",
+		"namespace":     "prod",
 	})
 	items = extractItems(t, resp)
 	if len(items) != 1 {
-		t.Fatalf("name filter 'frontend': expected 1 item, got %d", len(items))
+		t.Fatalf("name_contains filter 'frontend': expected 1 item, got %d", len(items))
 	}
 
 	// Search for non-existing name returns empty.
+	resp = callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
+		"name_contains": "nonexistent",
+		"namespace":     "prod",
+	})
+	items = extractItems(t, resp)
+	if len(items) != 0 {
+		t.Fatalf("name_contains filter 'nonexistent': expected 0 items, got %d", len(items))
+	}
+}
+
+// --- Integration test: name exact match ---
+
+func TestResourcesFilter_NameExact(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedResourcesWithLabels(t, db, seedLabelsOptions{
+		Cluster:         "cluster-a",
+		Namespace:       "prod",
+		ResourceGroup:   "apps",
+		ResourceVersion: "v1",
+		ResourceKind:    "Deployment",
+		ResourcePlural:  "deployments",
+		StartTime:       now,
+		Delta:           time.Second,
+		Resources: []seedResource{
+			{Name: "my-api-service", Labels: map[string]string{"app": "api"}},
+			{Name: "api-gateway", Labels: map[string]string{"app": "api"}},
+			{Name: "frontend-app", Labels: map[string]string{"app": "frontend"}},
+		},
+	})
+
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+
+	// Exact match: only "api-gateway" should be returned.
+	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
+		"name":      "api-gateway",
+		"namespace": "prod",
+	})
+	items := extractItems(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("exact name filter 'api-gateway': expected 1 item, got %d", len(items))
+	}
+	first := items[0].(map[string]any)
+	if first["name"] != "api-gateway" {
+		t.Fatalf("expected name=api-gateway, got %v", first["name"])
+	}
+
+	// Exact match is case-sensitive: "API-gateway" should return empty.
+	resp = callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
+		"name":      "API-gateway",
+		"namespace": "prod",
+	})
+	items = extractItems(t, resp)
+	if len(items) != 0 {
+		t.Fatalf("exact name filter 'API-gateway': expected 0 items (case-sensitive), got %d", len(items))
+	}
+
+	// Non-existing exact name returns empty.
 	resp = callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
 		"name":      "nonexistent",
 		"namespace": "prod",
 	})
 	items = extractItems(t, resp)
 	if len(items) != 0 {
-		t.Fatalf("name filter 'nonexistent': expected 0 items, got %d", len(items))
+		t.Fatalf("exact name filter 'nonexistent': expected 0 items, got %d", len(items))
+	}
+}
+
+// --- Integration test: name and name_contains are mutually exclusive ---
+
+func TestResourcesFilter_NameAndNameContainsMutuallyExclusive(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+
+	// GET with both name and name_contains should return 400.
+	req := httptest.NewRequest("GET",
+		"/resources?group=apps&version=v1&resource=deployments&namespace=default&name=foo&name_contains=bar", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for mutual exclusion, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -746,7 +828,7 @@ func TestParseRequest(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "group only is valid",
+			name:       "group only is valid (namespace defaults to default)",
 			url:        "/resources?group=apps",
 			wantGroup:  "apps",
 		},
@@ -815,6 +897,12 @@ func TestParseRequest(t *testing.T) {
 			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&cursor=bm90LWpzb24=",
 			wantStatus: http.StatusBadRequest,
 		},
+		{
+			name:       "limit=-1 means unlimited",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&limit=-1",
+			wantGroup:  "apps",
+			wantPlural: "deployments",
+		},
 	}
 
 	for _, tt := range tests {
@@ -858,6 +946,18 @@ func TestParseRequest(t *testing.T) {
 				}
 				if params.Name != "api" {
 					t.Fatalf("expected Name=api, got %q", params.Name)
+				}
+			}
+			// Verify namespace defaults to "default" when absent.
+			if tt.name == "group only is valid (namespace defaults to default)" {
+				if params.Namespace != "default" {
+					t.Fatalf("expected Namespace=default, got %q", params.Namespace)
+				}
+			}
+			// Verify limit=-1 is unlimited.
+			if tt.name == "limit=-1 means unlimited" {
+				if params.Limit != -1 {
+					t.Fatalf("expected Limit=-1, got %d", params.Limit)
 				}
 			}
 		})
@@ -983,6 +1083,112 @@ func TestParseListParamsJSON_GroupOnly(t *testing.T) {
 	}
 	if got.ResourcePlural != "" {
 		t.Fatalf("expected empty plural, got %q", got.ResourcePlural)
+	}
+	// Namespace defaults to "default" when absent.
+	if got.Namespace != "default" {
+		t.Fatalf("expected namespace=default, got %q", got.Namespace)
+	}
+}
+
+// --- Namespace handling tests (GET) ---
+
+func TestParseRequest_NamespaceDefaults(t *testing.T) {
+	tests := []struct {
+		name          string
+		url           string
+		wantNamespace string
+	}{
+		{
+			name:          "absent namespace defaults to default",
+			url:           "/resources?group=apps&version=v1&resource=deployments",
+			wantNamespace: "default",
+		},
+		{
+			name:          "empty namespace defaults to default",
+			url:           "/resources?group=apps&version=v1&resource=deployments&namespace=",
+			wantNamespace: "default",
+		},
+		{
+			name:          "wildcard namespace means all",
+			url:           "/resources?group=apps&version=v1&resource=deployments&namespace=*",
+			wantNamespace: "", // empty = no filter
+		},
+		{
+			name:          "explicit namespace preserved",
+			url:           "/resources?group=apps&version=v1&resource=deployments&namespace=prod",
+			wantNamespace: "prod",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tt.url, nil)
+			params, herr := parseRequest(req)
+			if herr != nil {
+				t.Fatalf("unexpected error: %d %s", herr.status, herr.msg)
+			}
+			if params.Namespace != tt.wantNamespace {
+				t.Fatalf("expected Namespace=%q, got %q", tt.wantNamespace, params.Namespace)
+			}
+		})
+	}
+}
+
+// --- Namespace handling tests (POST JSON) ---
+
+func TestParseListParamsJSON_NamespaceDefaults(t *testing.T) {
+	tests := []struct {
+		name          string
+		body          string
+		wantNamespace string
+	}{
+		{
+			name:          "absent namespace defaults to default",
+			body:          `{"group":"apps","version":"v1","resource":"deployments"}`,
+			wantNamespace: "default",
+		},
+		{
+			name:          "empty namespace defaults to default",
+			body:          `{"group":"apps","version":"v1","resource":"deployments","namespace":""}`,
+			wantNamespace: "default",
+		},
+		{
+			name:          "wildcard namespace means all",
+			body:          `{"group":"apps","version":"v1","resource":"deployments","namespace":"*"}`,
+			wantNamespace: "",
+		},
+		{
+			name:          "explicit namespace preserved",
+			body:          `{"group":"apps","version":"v1","resource":"deployments","namespace":"staging"}`,
+			wantNamespace: "staging",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", "/resources", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			got, err := parseListParamsJSON(req)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.Namespace != tt.wantNamespace {
+				t.Fatalf("expected Namespace=%q, got %q", tt.wantNamespace, got.Namespace)
+			}
+		})
+	}
+}
+
+// --- Unlimited limit tests (POST JSON) ---
+
+func TestParseListParamsJSON_UnlimitedLimit(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":-1}`))
+	got, err := parseListParamsJSON(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Limit != -1 {
+		t.Fatalf("expected limit=-1, got %d", got.Limit)
 	}
 }
 

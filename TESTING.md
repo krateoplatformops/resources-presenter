@@ -31,10 +31,7 @@ go test ./... -v -cover
 
 ## 3. In-Cluster E2E Testing (kind)
 
-This is the only way to test the full authentication and RBAC flow, because:
-- `use.UserConfig` middleware reads `{username}-clientconfig` Secrets from Kubernetes
-- `rbac.UserCan()` creates `SelfSubjectAccessReview` resources against the K8s API
-- Both require in-cluster config (`/var/run/secrets/kubernetes.io/serviceaccount/token`)
+This is the only way to test the full authentication and RBAC flow.
 
 ### 3.1 Prerequisites
 
@@ -49,6 +46,11 @@ This is the only way to test the full authentication and RBAC flow, because:
 ### 3.2 Create the kind cluster
 
 ```bash
+# cleanup any existing cluster with the same name
+kind delete cluster --name krateo-e2e
+
+# wait a few seconds to ensure all resources are cleaned up, then create a new cluster
+
 kind create cluster --name krateo-e2e
 
 # Check cluster is running and kubectl context is set
@@ -218,12 +220,22 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&cluster=prod-eu' | jq
 ```
 
-**Search by name** (case-insensitive partial match):
+**Search with name_contains** (case-insensitive partial match):
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&name=blueprints' | jq
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&name_contains=blueprints' | jq
 ```
+
+**Search with name** (exact match):
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&name=overview-blueprints-panel-481' | jq
+```
+
+Note that even if the result is 1 item, it will be returned in an array (`items: []`) to keep the response format consistent.
+Note that `name` and `name_contains` are mutually exclusive — providing both returns `400`.
 
 **Filter by labels:**
 
@@ -283,10 +295,6 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 # Namespace does not exist → 200 empty result (no resources discovered)
 curl -s -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=nonexistent' | jq
-
-# Group only (no version/resource) → valid, returns all resources in the group the user can access
-curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io' | jq
 ```
 
 Stop port-forwarding:

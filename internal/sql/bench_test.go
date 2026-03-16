@@ -65,7 +65,7 @@ func BenchmarkBuildListQuery_AllFilters(b *testing.B) {
 	p := deploymentParams("prod", 100)
 	p.Cluster = "cluster-a"
 	p.CompositionID = "550e8400-e29b-41d4-a716-446655440000"
-	p.Name = "api-service"
+	p.NameContains = "api-service"
 	p.Labels = `{"app":"nginx","tier":"backend"}`
 	p.Since = &since
 	p.Raw = true
@@ -201,9 +201,7 @@ func benchmarkListResources(b *testing.B, rowCount int, raw bool) {
 	}
 }
 
-func BenchmarkListResources_10rows(b *testing.B)   { benchmarkListResources(b, 10, false) }
-func BenchmarkListResources_100rows(b *testing.B)  { benchmarkListResources(b, 100, false) }
-func BenchmarkListResources_1000rows(b *testing.B) { benchmarkListResources(b, 1000, false) }
-func BenchmarkListResources_1000rows_raw(b *testing.B) {
-	benchmarkListResources(b, 1000, true)
-}
+func BenchmarkListResources_10rows(b *testing.B)       { benchmarkListResources(b, 10, false) }
+func BenchmarkListResources_100rows(b *testing.B)      { benchmarkListResources(b, 100, false) }
+func BenchmarkListResources_1000rows(b *testing.B)     { benchmarkListResources(b, 1000, false) }
+func BenchmarkListResources_1000rows_raw(b *testing.B) { benchmarkListResources(b, 1000, true) }

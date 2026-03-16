@@ -48,7 +48,7 @@ func (b *Builder) OrderBy(order string) {
 }
 
 // Limit sets a LIMIT clause on the query.
-// If n is less than or equal to zero, it is ignored.
+// If n is less than or equal to zero, it is ignored and no LIMIT is applied.
 func (b *Builder) Limit(n int) {
 	if n > 0 {
 		b.limit = &n

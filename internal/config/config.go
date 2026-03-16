@@ -88,6 +88,9 @@ func Setup() *Config {
 		"Kubernetes namespace where user clientconfig secrets are stored",
 	)
 
+	// RBAC CACHE TTL
+	// RBAC CACHE MAX ENTRIES
+
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Flags:")
 		flag.PrintDefaults()
@@ -100,6 +103,8 @@ func Setup() *Config {
 	cfg.DbReadyTimeout = *cfgDbReadyTimeout
 	cfg.SigningKey = *cfgSignKey
 	cfg.AuthnNS = *cfgAuthnNS
+	// RBAC CACHE TTL
+	// RBAC CACHE MAX ENTRIES
 
 	cfg.Log = logutil.New(serviceName, cfg.Debug)
 

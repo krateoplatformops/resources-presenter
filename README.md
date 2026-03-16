@@ -24,7 +24,7 @@ GET  /resources?group=<group>[&version=<version>][&resource=<resource>][&namespa
 POST /resources
 ```
 
-The resource type is identified by the **required** `group` parameter. `version` and `resource` are optional filters that narrow the discovery query. These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural` in the `krateo_resources` table.
+The resource type is identified by the **required** `group` parameter. `version` and `resource` are optional filters that narrow the discovery query. These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural` in the `krateo_resources` table of the PostgreSQL database.
 
 ### Filters
 
@@ -36,13 +36,14 @@ All filters are optional and combined with `AND`.
 | `version` | string | Optional. API version (e.g. `v1`, `v1beta1`). Narrows discovery. |
 | `resource` | string | Optional. Resource plural name (e.g. `deployments`, `panels`). Lowercase. Narrows discovery. |
 | `cluster` | string | Exact match on `cluster_name` |
-| `namespace` | string | Exact match on `namespace` |
+| `namespace` | string | Exact match on `namespace`. Default: `"default"`. Use `"*"` for all namespaces. See [Namespace Handling](#namespace-handling). |
 | `composition_id` | UUID | Exact match on `composition_id` |
-| `name` | string | Case-insensitive partial match (`ILIKE %name%`) |
+| `name` | string | Exact match on `resource_name`. Mutually exclusive with `name_contains`. |
+| `name_contains` | string | Case-insensitive partial match (`ILIKE %name_contains%`). Mutually exclusive with `name`. |
 | `labels` | JSON object | JSONB containment on `metadata.labels` (`@>`) |
 | `since` | RFC3339 | Resources with `updated_at >= since` |
 | `raw` | boolean | Include full Kubernetes object (default: `false`) |
-| `limit` | integer | Page size (default: `100`, max: `5000`) |
+| `limit` | integer | Page size (default: `100`). Use `-1` for unlimited (returns all results, no pagination). |
 | `cursor` | base64 | Opaque keyset cursor from previous response |
 
 GET uses query parameters. POST uses the same fields as a JSON body (with `labels` as a JSON object, not a string). Note: `kind` is not a query parameter — the `resource` (plural) field is used for filtering. Only `group` is required; all other fields are optional.
@@ -55,6 +56,7 @@ GET uses query parameters. POST uses the same fields as a JSON body (with `label
   "items": [
     {
       "name": "my-panel",
+      "uid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       "namespace": "krateo-system",
       "group": "widgets.templates.krateo.io",
       "version": "v1beta1",
@@ -72,6 +74,18 @@ GET uses query parameters. POST uses the same fields as a JSON body (with `label
 - `composition_id` appears only when set (non-null)
 - `raw` appears only when `raw=true` is requested
 - `cursor` is absent on the last page or when results fit in a single page
+
+### Namespace Handling
+
+The `namespace` parameter follows Kubernetes API semantics:
+
+| Value | Behavior |
+| --- | --- |
+| *(absent/empty)* | Defaults to `"default"` — only resources in the `default` namespace are returned |
+| `*` | All namespaces — no namespace filter is applied. RBAC is still enforced, so only resources the user has access to will be returned. |
+| `prod`, `krateo-system`, etc. | Exact match on the specified namespace |
+
+This mirrors how `kubectl` works: commands target the `default` namespace unless `-n` or `--all-namespaces` is specified.
 
 ### Error Responses
 

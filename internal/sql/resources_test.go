@@ -13,7 +13,7 @@ import (
 
 // baseCols returns the column names expected for raw=false queries.
 func baseCols() []string {
-	return []string{"resource_name", "namespace", "resource_group", "resource_version", "resource_kind", "resource_plural", "cluster_name", "created_at", "updated_at", "composition_id", "id"}
+	return []string{"resource_name", "uid", "namespace", "resource_group", "resource_version", "resource_kind", "resource_plural", "cluster_name", "created_at", "updated_at", "composition_id", "id"}
 }
 
 // rawCols returns the column names expected for raw=true queries.
@@ -56,12 +56,12 @@ func deploymentParams(ns string, limit int) ListParams {
 
 // panelRow builds an AddRow call for a Panel resource.
 func panelRow(name, ns, cluster string, created, updated time.Time, compID *string, id int64) []any {
-	return []any{name, ns, "widgets.templates.krateo.io", "v1beta1", "Panel", "panels", cluster, created, updated, compID, id}
+	return []any{name, "uid-" + name, ns, "widgets.templates.krateo.io", "v1beta1", "Panel", "panels", cluster, created, updated, compID, id}
 }
 
 // deploymentRow builds an AddRow call for a Deployment resource.
 func deploymentRow(name, ns, cluster string, created, updated time.Time, compID *string, id int64) []any {
-	return []any{name, ns, "apps", "v1", "Deployment", "deployments", cluster, created, updated, compID, id}
+	return []any{name, "uid-" + name, ns, "apps", "v1", "Deployment", "deployments", cluster, created, updated, compID, id}
 }
 
 // panelArgs builds expected query args: group, version, resource (from IN), namespace (from IN), then extra.
@@ -489,7 +489,7 @@ func TestBuildListQuery_AllFilters(t *testing.T) {
 	p := deploymentParams("prod", 25)
 	p.Cluster = "cluster-a"
 	p.CompositionID = "550e8400-e29b-41d4-a716-446655440000"
-	p.Name = "nginx"
+	p.NameContains = "nginx"
 	p.Labels = `{"app":"nginx"}`
 	p.Since = &since
 	p.Raw = true
@@ -681,9 +681,9 @@ func TestBuildListQuery_CompositionIDFilter(t *testing.T) {
 	}
 }
 
-func TestBuildListQuery_NameFilter(t *testing.T) {
+func TestBuildListQuery_NameContainsFilter(t *testing.T) {
 	p := deploymentParams("default", 50)
-	p.Name = "api"
+	p.NameContains = "api"
 
 	query, args, err := buildListQuery(p)
 	if err != nil {
@@ -698,6 +698,29 @@ func TestBuildListQuery_NameFilter(t *testing.T) {
 	}
 	if !strings.Contains(query, "resource_name ILIKE") {
 		t.Errorf("expected ILIKE clause, got:\n%s", query)
+	}
+}
+
+func TestBuildListQuery_NameExactFilter(t *testing.T) {
+	p := deploymentParams("default", 50)
+	p.Name = "my-deployment"
+
+	query, args, err := buildListQuery(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(args) != 6 {
+		t.Fatalf("expected 6 args, got %d: %v", len(args), args)
+	}
+	if args[4] != "my-deployment" {
+		t.Errorf("arg[4] = %v, want my-deployment", args[4])
+	}
+	if !strings.Contains(query, "resource_name = ") {
+		t.Errorf("expected exact match clause, got:\n%s", query)
+	}
+	if strings.Contains(query, "ILIKE") {
+		t.Errorf("expected no ILIKE clause for exact match, got:\n%s", query)
 	}
 }
 
@@ -751,7 +774,7 @@ func TestBuildListQuery_AllNewFilters(t *testing.T) {
 	p := deploymentParams("prod", 25)
 	p.Cluster = "cluster-a"
 	p.CompositionID = "550e8400-e29b-41d4-a716-446655440000"
-	p.Name = "api"
+	p.NameContains = "api"
 	p.Labels = `{"app":"nginx"}`
 	p.Since = &since
 	p.Raw = true
@@ -792,7 +815,7 @@ func TestBuildListQuery_PlaceholderIndexing(t *testing.T) {
 	p := deploymentParams("prod", 25)
 	p.Cluster = "cluster-a"
 	p.CompositionID = "550e8400-e29b-41d4-a716-446655440000"
-	p.Name = "api"
+	p.NameContains = "api"
 	p.Labels = `{"app":"nginx"}`
 	p.Since = &since
 	p.Raw = true
@@ -961,7 +984,7 @@ func TestListResources_CompositionIDFilter(t *testing.T) {
 	}
 }
 
-func TestListResources_NameFilter(t *testing.T) {
+func TestListResources_NameContainsFilter(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -979,7 +1002,7 @@ func TestListResources_NameFilter(t *testing.T) {
 		WillReturnRows(rows)
 
 	params := deploymentParams("default", 50)
-	params.Name = "api"
+	params.NameContains = "api"
 
 	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
@@ -988,6 +1011,43 @@ func TestListResources_NameFilter(t *testing.T) {
 
 	if len(result.Items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(result.Items))
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListResources_NameExactFilter(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+
+	rows := pgxmock.NewRows(baseCols()).
+		AddRows(deploymentRow("my-api-service", "default", "cluster-a", created, now, nil, int64(1)))
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
+		WithArgs(deploymentArgs("default", "my-api-service", 51)...).
+		WillReturnRows(rows)
+
+	params := deploymentParams("default", 50)
+	params.Name = "my-api-service"
+
+	result, err := ListResources(context.Background(), mock, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(result.Items))
+	}
+	if result.Items[0].Name != "my-api-service" {
+		t.Errorf("expected name 'my-api-service', got %q", result.Items[0].Name)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -1057,6 +1117,109 @@ func TestListResources_SinceFilter(t *testing.T) {
 
 	if len(result.Items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(result.Items))
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --- Unlimited limit tests ---
+
+func TestBuildListQuery_UnlimitedLimit(t *testing.T) {
+	p := deploymentParams("default", -1)
+
+	query, args, err := buildListQuery(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// No LIMIT clause when limit is -1.
+	if strings.Contains(query, "LIMIT") {
+		t.Errorf("expected no LIMIT clause for unlimited, got:\n%s", query)
+	}
+
+	// group + version + IN(resource, namespace) = 4 args (no limit arg).
+	if len(args) != 4 {
+		t.Fatalf("expected 4 args (no limit), got %d: %v", len(args), args)
+	}
+
+	t.Logf("query: %s", query)
+}
+
+func TestListResources_UnlimitedLimit(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+
+	// Return 5 rows with no LIMIT in the query.
+	rows := pgxmock.NewRows(baseCols()).
+		AddRows(deploymentRow("res-1", "default", "cluster-a", created, now, nil, int64(5))).
+		AddRows(deploymentRow("res-2", "default", "cluster-a", created, now.Add(-time.Second), nil, int64(4))).
+		AddRows(deploymentRow("res-3", "default", "cluster-a", created, now.Add(-2*time.Second), nil, int64(3))).
+		AddRows(deploymentRow("res-4", "default", "cluster-a", created, now.Add(-3*time.Second), nil, int64(2))).
+		AddRows(deploymentRow("res-5", "default", "cluster-a", created, now.Add(-4*time.Second), nil, int64(1)))
+
+	// No limit arg expected.
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
+		WithArgs(deploymentArgs("default")...).
+		WillReturnRows(rows)
+
+	params := deploymentParams("default", -1)
+
+	result, err := ListResources(context.Background(), mock, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Items) != 5 {
+		t.Fatalf("expected 5 items, got %d", len(result.Items))
+	}
+	if result.Cursor != "" {
+		t.Fatal("expected empty cursor for unlimited query")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --- UID field test ---
+
+func TestListResources_UidField(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+
+	rows := pgxmock.NewRows(baseCols()).
+		AddRows(deploymentRow("nginx", "default", "cluster-a", created, now, nil, int64(1)))
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
+		WithArgs(deploymentArgs("default", 51)...).
+		WillReturnRows(rows)
+
+	params := deploymentParams("default", 50)
+
+	result, err := ListResources(context.Background(), mock, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(result.Items))
+	}
+	if result.Items[0].Uid != "uid-nginx" {
+		t.Errorf("expected uid=uid-nginx, got %q", result.Items[0].Uid)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

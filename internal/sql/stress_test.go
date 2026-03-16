@@ -12,6 +12,7 @@ import (
 )
 
 // TestListResources_MaxLimit verifies behavior at the maximum allowed limit (5000 rows).
+// Currently, the maxLimit of 5000 is not enforced.
 func TestListResources_MaxLimit(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -226,7 +227,7 @@ func TestListResources_ConcurrentAccess(t *testing.T) {
 }
 
 // TestBuildListQuery_AllFilterCombinations exhaustively tests that the builder
-// generates valid SQL for all 2^6 = 64 combinations of optional filters.
+// generates valid SQL for all 2^5 = 32 combinations of optional filters.
 func TestBuildListQuery_AllFilterCombinations(t *testing.T) {
 	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	cursor := EncodeCursor(&ResourcesCursor{
@@ -243,7 +244,7 @@ func TestBuildListQuery_AllFilterCombinations(t *testing.T) {
 	filters := []filter{
 		{"cluster", func(p *ListParams) { p.Cluster = "cluster-a" }, 1},
 		{"composition_id", func(p *ListParams) { p.CompositionID = "550e8400-e29b-41d4-a716-446655440000" }, 1},
-		{"name", func(p *ListParams) { p.Name = "api" }, 1},
+		{"name_contains", func(p *ListParams) { p.NameContains = "api" }, 1},
 		{"labels", func(p *ListParams) { p.Labels = `{"app":"nginx"}` }, 1},
 		{"since", func(p *ListParams) { p.Since = &since }, 1},
 	}

@@ -2,6 +2,7 @@ package rbac
 
 import (
 	"context"
+	"log"
 
 	"github.com/krateoplatformops/plumbing/kubeutil/rbac"
 	"github.com/krateoplatformops/resources-presenter/internal/sql"
@@ -25,7 +26,7 @@ func (RbacAuthorizer) FilterAllowed(ctx context.Context, targets []sql.ResourceT
 		return nil
 	}
 
-	// Convert to plumbing UserCanTarget (verb=get, no version).
+	// verb=get, no version needed by Kubernetes RBAC
 	ucts := make([]rbac.UserCanTarget, len(targets))
 	for i, t := range targets {
 		ucts[i] = rbac.UserCanTarget{
@@ -42,9 +43,21 @@ func (RbacAuthorizer) FilterAllowed(ctx context.Context, targets []sql.ResourceT
 	var allowed []sql.ResourceTarget
 	for i, t := range targets {
 		if decisions[ucts[i]] {
+			log.Printf("RBAC ALLOWED: group=%s resource=%s namespace=%s\n", t.Group, t.Resource, t.Namespace)
 			allowed = append(allowed, t)
+		} else {
+			log.Printf("RBAC DENIED: group=%s resource=%s namespace=%s\n", t.Group, t.Resource, t.Namespace)
 		}
 	}
+
+	// log allowed targets just for testing
+	log.Print("==========BEGIN ALLOWED LIST ===========\n")
+	for _, t := range allowed {
+		log.Print("=====================\n")
+		log.Printf("FINAL FILTERED ALLOWED: group=%s resource=%s namespace=%s\n", t.Group, t.Resource, t.Namespace)
+		log.Print("=====================\n")
+	}
+	log.Print("==========END ALLOWED LIST ===========\n")
 
 	return allowed
 }

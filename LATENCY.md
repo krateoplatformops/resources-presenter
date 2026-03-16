@@ -5,7 +5,7 @@
 Every request passes through this middleware chain before reaching the handler:
 
 ```
-TraceId → Access(starts timer) → CORS → UserConfig → Handler(starts its own timer)
+TraceId → Access(starts timer) → CORS → Gzip → UserConfig → Handler(starts its own timer)
 ```
 
 Two independent log lines are emitted per request, each measuring a different scope:
@@ -32,7 +32,7 @@ The discovery phase (2) enumerates all distinct (group, resource, namespace) tup
 
 ## UserConfig middleware
 
-The `UserConfig` middleware ([plumbing/server/use/userconfig.go](../plumbing/server/use/userconfig.go)) runs **before** the handler and performs two operations:
+The `UserConfig` middleware ([plumbing/server/use/userconfig.go](https://github.com/krateoplatformops/plumbing/blob/main/server/use/userconfig.go)) runs **before** the handler and performs two operations:
 
 1. **JWT validation** — decodes and verifies the HS256 token from the `Authorization` header
 2. **K8s Secret fetch** — calls `endpoints.FromSecret()` to read the `{username}-clientconfig` Secret from the Kubernetes API server
@@ -41,7 +41,7 @@ The Secret fetch is a network call to the K8s API and accounts for a large porti
 
 ## Example
 
-```
+```sh
 [14:29:34.904] DEBUG: request completed by handler {
   "handler_duration_ms": {
     "1_parse": 0.028,
@@ -66,4 +66,4 @@ The Secret fetch is a network call to the K8s API and accounts for a large porti
 | 4_query (handler) | PostgreSQL: filtered list query |
 | Other (parse + serialize) | None |
 
-The K8s API calls (`UserConfig` + `3_rbac_authz`) are independent operations against different endpoints: one fetches user credentials, the other checks RBAC permissions. The two PostgreSQL calls (`2_discovery` + `4_query`) are sequential — discovery must complete before the RBAC check, and the list query uses the RBAC-filtered targets.
+The K8s API calls (`UserConfig` + `3_rbac_authz`) are independent operations against different endpoints: one fetches user credentials, the other checks RBAC permissions. The two PostgreSQL calls (`2_discovery` + `4_query`) are sequential: discovery must complete before the RBAC check, and the list query uses the RBAC-filtered targets.

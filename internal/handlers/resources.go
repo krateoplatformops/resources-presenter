@@ -19,7 +19,6 @@ import (
 
 const (
 	defaultLimit = 100
-	maxLimit     = 5000
 	queryTimeout = 10 * time.Second
 )
 
@@ -167,7 +166,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 			return
 		}
 
-		// No matching resources exist — return empty result (not 404).
+		// No matching resources exist: return empty result (not 404).
 		if len(discovered) == 0 {
 			log.Debug("discovery found no targets", slog.String("gvr", gvr), slog.String("trace_id", traceId))
 			statusCode = http.StatusOK
@@ -227,6 +226,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 
 		statusCode = http.StatusOK
 		rowsReturned = len(result.Items)
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write(data); err != nil {
@@ -322,14 +322,33 @@ func parseListParams(r *http.Request) (sql.ListParams, error) {
 		return sql.ListParams{}, fmt.Errorf("invalid cursor: %w", err)
 	}
 
+	// Namespace handling follows Kubernetes API semantics:
+	// - absent/empty → "default" (like kubectl)
+	// - "*"          → all namespaces (no filter)
+	// - any other    → exact match
+	namespace := q.Get("namespace")
+	switch namespace {
+	case "":
+		namespace = "default"
+	case "*":
+		namespace = "" // empty = no namespace filter in SQL layer
+	}
+
+	name := q.Get("name")
+	nameContains := q.Get("name_contains")
+	if name != "" && nameContains != "" {
+		return sql.ListParams{}, fmt.Errorf("'name' and 'name_contains' are mutually exclusive")
+	}
+
 	p := sql.ListParams{
 		ResourceGroup:   group,
 		ResourceVersion: version,
 		ResourcePlural:  resource,
 		Cluster:         q.Get("cluster"),
-		Namespace:       q.Get("namespace"),
+		Namespace:       namespace,
 		CompositionID:   compositionID,
-		Name:            q.Get("name"),
+		Name:            name,
+		NameContains:    nameContains,
 		Labels:          labels,
 		Since:           since,
 		Raw:             q.Get("raw") == "true",
@@ -349,6 +368,7 @@ type resourcesJSONPayload struct {
 	Namespace     string         `json:"namespace"`
 	CompositionID string         `json:"composition_id"`
 	Name          string         `json:"name"`
+	NameContains  string         `json:"name_contains"`
 	Labels        map[string]any `json:"labels"`
 	Since         *time.Time     `json:"since"`
 	Raw           *bool          `json:"raw"`
@@ -385,11 +405,14 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 	if payload.Limit != nil {
 		limit = *payload.Limit
 	}
-	if limit <= 0 {
+	if limit == -1 {
+		// unlimited, keep -1
+	} else if limit <= 0 {
 		limit = defaultLimit
 	}
-	if limit > maxLimit {
-		limit = maxLimit
+
+	if payload.Name != "" && payload.NameContains != "" {
+		return sql.ListParams{}, fmt.Errorf("'name' and 'name_contains' are mutually exclusive")
 	}
 
 	if payload.CompositionID != "" && !uuidRegex.MatchString(payload.CompositionID) {
@@ -410,6 +433,18 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 		raw = *payload.Raw
 	}
 
+	// Namespace handling follows Kubernetes API semantics:
+	// - absent/empty → "default" (like kubectl)
+	// - "*"          → all namespaces (no filter)
+	// - any other    → exact match
+	namespace := payload.Namespace
+	switch namespace {
+	case "":
+		namespace = "default"
+	case "*":
+		namespace = "" // empty = no namespace filter in SQL layer
+	}
+
 	cursor := sql.EncodedCursor(payload.Cursor)
 	if err := sql.ValidateCursor(cursor); err != nil {
 		return sql.ListParams{}, fmt.Errorf("invalid cursor: %w", err)
@@ -420,9 +455,10 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 		ResourceVersion: payload.Version,
 		ResourcePlural:  payload.Resource,
 		Cluster:         payload.Cluster,
-		Namespace:       payload.Namespace,
+		Namespace:       namespace,
 		CompositionID:   payload.CompositionID,
 		Name:            payload.Name,
+		NameContains:    payload.NameContains,
 		Labels:          labels,
 		Since:           payload.Since,
 		Raw:             raw,
@@ -440,13 +476,13 @@ func parseLimit(v string) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("invalid limit: %w", err)
 		}
+		if n == -1 {
+			return -1, nil // unlimited
+		}
 		limit = n
 	}
 	if limit <= 0 {
 		limit = defaultLimit
-	}
-	if limit > maxLimit {
-		limit = maxLimit
 	}
 	return limit, nil
 }

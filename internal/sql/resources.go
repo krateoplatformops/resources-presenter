@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -32,7 +33,8 @@ type ListParams struct {
 	Cluster         string
 	Namespace       string
 	CompositionID   string // UUID as string; empty means no filter
-	Name            string // case-insensitive partial match (ILIKE %name%)
+	Name            string // exact match on resource_name
+	NameContains    string // case-insensitive partial match (ILIKE %name%)
 	Labels          string // raw JSON string for JSONB containment (@>)
 	Since           *time.Time
 	Raw             bool
@@ -48,6 +50,7 @@ type ListParams struct {
 // ResourceItem is the response DTO for a single resource.
 type ResourceItem struct {
 	Name          string          `json:"name"`
+	Uid           string          `json:"uid"`
 	Namespace     string          `json:"namespace"`
 	Group         string          `json:"group"`
 	Version       string          `json:"version"`
@@ -77,8 +80,10 @@ type rowCursor struct {
 // tuples matching the provided filters. The result is used to enumerate RBAC targets
 // before the main list query.
 //
-// Filters applied: ResourceGroup (required), ResourceVersion, ResourcePlural,
-// Namespace, Cluster — all optional except group. Only active rows are considered.
+// Filters applied:
+// - ResourceGroup (required)
+// - ResourceVersion, ResourcePlural, Namespace, Cluster (all optional, to narrow down the result set)
+// Only active rows are considered.
 func DiscoverTargets(ctx context.Context, db Querier, p ListParams) ([]ResourceTarget, error) {
 	b := NewBuilder()
 
@@ -136,12 +141,17 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 	defer rows.Close()
 
 	// Pre-allocate to avoid repeated growing for large result sets.
-	items := make([]ResourceItem, 0, p.Limit+1)
-	cursors := make([]rowCursor, 0, p.Limit+1)
+	initialCap := p.Limit + 1
+	if p.Limit <= 0 {
+		initialCap = 256 // reasonable default for unlimited queries
+	}
+	items := make([]ResourceItem, 0, initialCap)
+	cursors := make([]rowCursor, 0, initialCap)
 
 	for rows.Next() {
 		var (
 			resourceName    string
+			uid             string
 			namespace       string
 			resourceGroup   string
 			resourceVersion string
@@ -156,7 +166,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 		)
 
 		scanDest := []any{
-			&resourceName, &namespace,
+			&resourceName, &uid, &namespace,
 			&resourceGroup, &resourceVersion, &resourceKind, &resourcePlural,
 			&clusterName, &createdAt, &updatedAt, &compositionID,
 			&id,
@@ -171,6 +181,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 
 		item := ResourceItem{
 			Name:          resourceName,
+			Uid:           uid,
 			Namespace:     namespace,
 			Group:         resourceGroup,
 			Version:       resourceVersion,
@@ -194,19 +205,22 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 
 	result := &ListResult{}
 
-	// We fetched limit+1 rows. If we got more than limit, there's a next page.
-	hasNextPage := len(items) > p.Limit
-	if hasNextPage {
-		items = items[:p.Limit]
-		cursors = cursors[:p.Limit]
-	}
+	// Pagination: only applies when a finite limit is set.
+	// When Limit == -1 (unlimited), all rows are returned with no cursor.
+	if p.Limit > 0 {
+		hasNextPage := len(items) > p.Limit
+		if hasNextPage {
+			items = items[:p.Limit]
+			cursors = cursors[:p.Limit]
+		}
 
-	if hasNextPage && len(cursors) > 0 {
-		last := cursors[len(cursors)-1]
-		result.Cursor = EncodeCursor(&ResourcesCursor{
-			UpdatedAt: last.updatedAt,
-			ID:        last.id,
-		})
+		if hasNextPage && len(cursors) > 0 {
+			last := cursors[len(cursors)-1]
+			result.Cursor = EncodeCursor(&ResourcesCursor{
+				UpdatedAt: last.updatedAt,
+				ID:        last.id,
+			})
+		}
 	}
 
 	if items == nil {
@@ -241,9 +255,9 @@ func buildListQuery(p ListParams) (string, []any, error) {
 		}
 		b.Where(fmt.Sprintf("(resource_plural, namespace) IN (%s)", strings.Join(parts, ", ")), args...)
 	} else {
-		// log a warning ijust for testing
-		fmt.Println("WARNING: no RBAC targets")
-		fmt.Println("WARNING: probably we will not arrive here in e2e because the handler should enforce discovery+RBAC before this")
+		// log a warning just for testing, to be removed
+		log.Println("WARNING: no RBAC targets")
+		log.Println("WARNING: probably we will not arrive here in e2e because the handler should enforce discovery+RBAC before this")
 	}
 
 	// Soft-delete filter: only return active rows.
@@ -258,7 +272,11 @@ func buildListQuery(p ListParams) (string, []any, error) {
 	}
 
 	if p.Name != "" {
-		b.Where("resource_name ILIKE ?", "%"+escapeLIKE(p.Name)+"%")
+		b.Where("resource_name = ?", p.Name)
+	}
+
+	if p.NameContains != "" {
+		b.Where("resource_name ILIKE ?", "%"+escapeLIKE(p.NameContains)+"%")
 	}
 
 	if p.Labels != "" {
@@ -280,11 +298,13 @@ func buildListQuery(p ListParams) (string, []any, error) {
 
 	b.OrderBy("updated_at DESC, id DESC")
 
-	// Fetch limit+1 to detect next page
-	b.Limit(p.Limit + 1)
+	// Fetch limit+1 to detect next page; skip when unlimited (Limit == -1).
+	if p.Limit > 0 {
+		b.Limit(p.Limit + 1)
+	}
 
 	// Columns
-	cols := "resource_name, namespace, resource_group, resource_version, resource_kind, resource_plural, cluster_name, created_at, updated_at, composition_id, id"
+	cols := "resource_name, uid, namespace, resource_group, resource_version, resource_kind, resource_plural, cluster_name, created_at, updated_at, composition_id, id"
 	if p.Raw {
 		cols += ", raw"
 	}
