@@ -85,7 +85,7 @@ type rowCursor struct {
 // - ResourceVersion, ResourcePlural, Namespace, Cluster (all optional, to narrow down the result set)
 // Only active rows are considered.
 
-//TODO: discover with just uid (it should return always 1 row)
+//TODO: discover with just guid (it should return always 1 row)
 
 func DiscoverTargets(ctx context.Context, db Querier, p ListParams) ([]ResourceTarget, error) {
 	b := NewBuilder()

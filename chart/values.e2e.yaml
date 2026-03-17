@@ -9,7 +9,7 @@
 
 image:
   repository: resources-presenter
-  pullPolicy: Never   # image loaded via `kind load docker-image`
+  pullPolicy: Never   # image loaded via `kind load docker-image`, explained in TESTING.md
   tag: "dev"
 
 # DB credentials inline — no external secret needed for E2E.
@@ -20,11 +20,11 @@ config:
   DEBUG: "true"
 
   # Database (matches deploy/test-postgres.yaml)
-  DB_HOST: "postgres.krateo-system.svc.cluster.local"
-  DB_PORT: "5432"
-  DB_NAME: "krateo"
-  DB_USER: "krateo"
-  DB_PASS: "krateo"
+  DB_HOST: "postgres.krateo-system.svc.cluster.local" # must match the service name of the test PostgreSQL instance
+  DB_PORT: "5432" # must match the port exposed by the test PostgreSQL instance
+  DB_NAME: "krateo" # must match the database created in deploy/test-postgres.yaml
+  DB_USER: "krateo" # must match the user created in deploy/test-postgres.yaml
+  DB_PASS: "krateo" # must match the password set in deploy/test-postgres.yaml
   DB_PARAMS: "sslmode=disable&connect_timeout=5"
   DB_READY_TIMEOUT: "2m"
 

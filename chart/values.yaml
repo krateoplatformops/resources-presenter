@@ -120,13 +120,13 @@ affinity: {}
 # The secret must contain: DB_USER and DB_PASS keys
 # The secret must be created in the same namespace where the chart is deployed.
 # Example:
-#   kubectl create secret generic events-stack-db \
+#   kubectl create secret generic krateo-db \
 #     --from-literal=DB_USER=myuser \
 #     --from-literal=DB_PASS=mypass \
 #     -n namespace_name
 # NOTE: if the krateo installation is executed with krateoctl, the dbSecret will be automatically created with the appropriate values.
 dbSecret:
-  name: events-stack-db # Name of the Kubernetes Secret containing DB_USER and DB_PASS keys for database credentials
+  name: krateo-db # Name of the Kubernetes Secret containing DB_USER and DB_PASS keys for database credentials
 
 # Secret reference for JWT signing key
 # NOTE: if the krateo installation is executed with krateoctl, the signKeySecret will be automatically created with the appropriate values.
