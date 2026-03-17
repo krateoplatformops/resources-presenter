@@ -11,40 +11,42 @@ Supported methods:
 
 Each item in the response represents the current state of a Kubernetes resource (one row per `global_uid`).
 
-Each item includes: `name`, `namespace`, `group`, `version`, `kind`, `resource`, `cluster_name`, `created_at`, `updated_at`, and `composition_id` (when set).
+Each item includes: `name`, `uid`, `namespace`, `group`, `version`, `kind`, `resource`, `cluster_name`, `created_at`, `updated_at`, and `composition_id` (when set).
 Use `raw=true` to also include the full Kubernetes object under the `raw` field.
 
 ## Resource Resolution
 
-The resource type is identified by three **required** parameters:
+The resource type is identified by the **required** `group` parameter, plus optional narrowing filters:
 
-| Parameter | Example | Description |
-| --- | --- | --- |
-| `group` | `apps`, `widgets.templates.krateo.io` | Kubernetes API group |
-| `version` | `v1`, `v1beta1` | API version |
-| `resource` | `deployments`, `panels` | Resource plural name (lowercase) |
+| Parameter | Example | Required? | Description |
+| --- | --- | --- | --- |
+| `group` | `apps`, `widgets.templates.krateo.io` | **Yes** | Kubernetes API group |
+| `version` | `v1`, `v1beta1` | No | API version (narrows discovery) |
+| `resource` | `deployments`, `panels` | No | Resource plural name (lowercase, narrows discovery) |
+| `namespace` | `default`, `prod` | No | Kubernetes namespace (exact match) |
 
 These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural`.
 
-Missing any of the three returns `400`.
+When `version` or `resource` are omitted, the handler discovers all matching resources within the group and RBAC-filters them before querying. Missing `group` returns `400`.
 
 ## Query Parameters
 
-All filters (except `group`, `version`, `resource`) are optional and are combined with `AND`.
+All filters (except `group`) are optional and are combined with `AND`.
 
 | Parameter | Type | Behavior |
 | --- | --- | --- |
 | `group` | string | **Required.** API group. |
-| `version` | string | **Required.** API version. |
-| `resource` | string | **Required.** Resource plural name (lowercase). |
-| `cluster` | string | Exact match on `cluster_name`. |
-| `namespace` | string | Exact match on `namespace`. |
-| `composition_id` | UUID | Exact match on `composition_id`. Must be a valid RFC 4122 UUID. |
-| `name` | string | Case-insensitive partial match on `resource_name` (`ILIKE %name%`). |
-| `labels` | JSON object (string) | JSONB containment on `raw->'metadata'->'labels'` (`@>`). Must be valid JSON. |
+| `version` | string | Optional. API version (narrows discovery). |
+| `resource` | string | Optional. Resource plural name (lowercase, narrows discovery). |
+| `namespace` | string | Optional. Exact match on `namespace`. Absent/empty defaults to `default`. `*` matches all namespaces (still filtered by RBAC). |
+| `cluster` | string | Optional. Exact match on `cluster_name`. |
+| `composition_id` | UUID | Optional. Exact match on `composition_id`. Must be a valid RFC 4122 UUID. |
+| `name` | string | Optional. Exact match on `resource_name`. Mutually exclusive with `name_contains`. |
+| `name_contains` | string | Optional. Case-insensitive partial match on `resource_name` (`ILIKE %name_contains%`). Mutually exclusive with `name`. |
+| `labels` | JSON object (string) | Optional. JSONB containment on `raw->'metadata'->'labels'` (`@>`). Must be valid JSON. |
 | `since` | RFC3339 timestamp | Includes resources with `updated_at >= since`. |
 | `raw` | boolean | If `true`, include the full `raw` JSONB field in the response. Default: `false`. |
-| `limit` | integer | Page size. Default: `100`, max: `5000`. If `<= 0`, default is used. |
+| `limit` | integer | Page size. Default: `100`. Use `-1` for unlimited (returns all results, no pagination). |
 | `cursor` | base64 string | Keyset cursor for pagination (opaque token returned by previous response). |
 
 If `since` is not valid RFC3339, `labels` is not valid JSON, or `composition_id` is not a valid UUID, the API returns `400`.
@@ -64,7 +66,7 @@ Example body:
   "cluster": "cluster-a",
   "namespace": "prod",
   "composition_id": "550e8400-e29b-41d4-a716-446655440000",
-  "name": "api",
+  "name": "my-api-service",
   "labels": {
     "app": "payments"
   },
@@ -77,7 +79,7 @@ Example body:
 
 Notes:
 
-- `group`, `version`, and `resource` are **required** in the JSON body too.
+- `group` is **required** in the JSON body; `version` and `resource` are optional.
 - Unknown JSON fields return `400`.
 - Empty body returns `400`.
 - `limit` defaults to `100` when omitted or `<= 0`.
@@ -105,17 +107,31 @@ curl --get "http://localhost:8080/resources" \
   --data-urlencode "namespace=default"
 ```
 
-### 3) GET: search by resource name (contains, case-insensitive)
+### 3) GET: exact match on resource name
 
 ```bash
 curl --get "http://localhost:8080/resources" \
   --data-urlencode "group=apps" \
   --data-urlencode "version=v1" \
   --data-urlencode "resource=deployments" \
-  --data-urlencode "name=api"
+  --data-urlencode "name=my-api-service"
+```
+
+Returns only the resource with `resource_name = 'my-api-service'` (case-sensitive, exact match).
+
+### 3b) GET: search by resource name (contains, case-insensitive)
+
+```bash
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "resource=deployments" \
+  --data-urlencode "name_contains=api"
 ```
 
 Matches names like `api`, `API`, `my-api-service`, `api-gateway`.
+
+> `name` and `name_contains` are mutually exclusive: providing both returns `400`.
 
 ### 4) GET: filter by labels
 
@@ -170,7 +186,7 @@ curl --get "http://localhost:8080/resources" \
   --data-urlencode "resource=deployments" \
   --data-urlencode "cluster=cluster-a" \
   --data-urlencode "namespace=prod" \
-  --data-urlencode "name=api" \
+  --data-urlencode "name_contains=api" \
   --data-urlencode 'labels={"app":"payments"}' \
   --data-urlencode "since=2026-03-01T00:00:00Z" \
   --data-urlencode "raw=true" \
@@ -188,7 +204,7 @@ curl --request POST "http://localhost:8080/resources" \
     "resource": "deployments",
     "cluster": "cluster-a",
     "namespace": "prod",
-    "name": "api",
+    "name_contains": "api",
     "labels": {"app": "payments"},
     "since": "2026-03-01T00:00:00Z",
     "raw": true,
@@ -299,6 +315,7 @@ If you change filters between pages, pagination continuity is broken.
   "items": [
     {
       "name": "my-api-service",
+      "uid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       "namespace": "prod",
       "group": "apps",
       "version": "v1",
@@ -310,6 +327,7 @@ If you change filters between pages, pagination continuity is broken.
     },
     {
       "name": "api-gateway",
+      "uid": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
       "namespace": "prod",
       "group": "apps",
       "version": "v1",
@@ -338,12 +356,13 @@ If you change filters between pages, pagination continuity is broken.
   - `created_at`: when the resource was first ingested (RFC3339)
   - `updated_at`: when the resource was last updated (RFC3339)
   - `composition_id`: Krateo composition UUID (omitted when null)
+  - `uid`: Kubernetes UID of the resource
   - `raw`: full Kubernetes object (only when `raw=true`)
 - `cursor`: present only if there are more pages; absent or empty on the last page
 
 ## Sorting
 
-Fixed order: `updated_at DESC, id DESC`. Not user-configurable.
+Fixed order: `updated_at DESC, id DESC`. Currently not user-configurable.
 
 ## Error Responses
 
@@ -351,6 +370,7 @@ Errors are returned as Kubernetes-style `Status` objects:
 
 | Status Code | Condition |
 | --- | --- |
-| `400` | Invalid or missing parameters (missing group/version/resource, bad UUID, JSON, timestamp, limit, cursor) |
+| `400` | Invalid or missing parameters (missing group, bad UUID, JSON, timestamp, limit, cursor) |
+| `403` | Forbidden — RBAC denied access to all discovered resources |
 | `405` | Method not allowed (only GET and POST are supported) |
 | `500` | Internal server error (database failure, serialization error) |

@@ -120,13 +120,21 @@ affinity: {}
 # The secret must contain: DB_USER and DB_PASS keys
 # The secret must be created in the same namespace where the chart is deployed.
 # Example:
-#   kubectl create secret generic events-stack-db \
+#   kubectl create secret generic krateo-db \
 #     --from-literal=DB_USER=myuser \
 #     --from-literal=DB_PASS=mypass \
 #     -n namespace_name
+# NOTE: if the krateo installation is executed with krateoctl, the dbSecret will be automatically created with the appropriate values.
+dbSecret:
+  name: krateo-db # Name of the Kubernetes Secret containing DB_USER and DB_PASS keys for database credentials
 
-secret:
-  name: events-stack-db # Name of the Kubernetes Secret containing DB_USER and DB_PASS keys for database credentials
+# Secret reference for JWT signing key
+# NOTE: if the krateo installation is executed with krateoctl, the signKeySecret will be automatically created with the appropriate values.
+signKeySecret:
+  name: jwt-sign-key # Name of the Kubernetes Secret containing SIGN_KEY for JWT validation
+
+endpointSecret:
+  create: true # Specifies whether a Secret containing the service URL should be created.
 
 # Application configuration environment variables
 config:
@@ -160,12 +168,11 @@ config:
   # Database name
   # DB_NAME: ""
 
-  # HMAC signing key for JWT validation (HS256).
+  # Signing key for JWT validation (loaded from secret)
   # Must match the key used by krateoctl to generate user tokens.
+  # This value can be used for development/testing
   # SIGN_KEY: ""
 
   # Kubernetes namespace where {username}-clientconfig Secrets are stored.
   # Used by use.UserConfig middleware to load user credentials for RBAC.
-  # A namespaced Role is created in this namespace granting the ServiceAccount
-  # read access to Secrets. Falls back to Release.Namespace if not set.
-  # AUTHN_NS: "krateo-system"
+  AUTHN_NS: "krateo-system"

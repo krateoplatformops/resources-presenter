@@ -1,9 +1,9 @@
-secret:
-  name: events-stack-db # Name of the Kubernetes Secret containing DB_USER and DB_PASS keys for database credentials
+dbSecret:
+  name: krateo-db # Name of the Kubernetes Secret containing DB_USER and DB_PASS keys for database credentials
 
 config:
   DEBUG: "true"
   DB_HOST: pg-cluster-rw.krateo-system.svc.cluster.local
-  DB_NAME: events-db
+  DB_NAME: krateo-db
   DB_PARAMS: "sslmode=disable&connect_timeout=5"
   DB_READY_TIMEOUT: "5m"

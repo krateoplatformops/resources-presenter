@@ -25,7 +25,7 @@ type Config struct {
 	DbReadyTimeout time.Duration
 	Log            *slog.Logger
 
-	// SigningKey is the HMAC key used to validate JWT tokens (HS256).
+	// SigningKey is the HMAC key used to validate JWT tokens.
 	SigningKey string
 	// AuthnNS is the Kubernetes namespace where user clientconfig secrets are stored.
 	AuthnNS string
@@ -80,13 +80,16 @@ func Setup() *Config {
 
 	cfgSignKey := flag.String("sign-key",
 		env.String("SIGN_KEY", ""),
-		"HMAC signing key for JWT validation",
+		"Signing key for JWT validation",
 	)
 
 	cfgAuthnNS := flag.String("authn-ns",
 		env.String("AUTHN_NS", ""),
 		"Kubernetes namespace where user clientconfig secrets are stored",
 	)
+
+	// RBAC CACHE TTL
+	// RBAC CACHE MAX ENTRIES
 
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Flags:")
@@ -100,6 +103,8 @@ func Setup() *Config {
 	cfg.DbReadyTimeout = *cfgDbReadyTimeout
 	cfg.SigningKey = *cfgSignKey
 	cfg.AuthnNS = *cfgAuthnNS
+	// RBAC CACHE TTL
+	// RBAC CACHE MAX ENTRIES
 
 	cfg.Log = logutil.New(serviceName, cfg.Debug)
 

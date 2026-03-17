@@ -10,21 +10,21 @@ Key features:
 
 - **GET and POST** query support with filter capabilities
 - **Keyset pagination** (`updated_at DESC, id DESC`) for stable, efficient paging
-- **Dynamic resource resolution** via `group`, `version`, and `resource` query parameters — no static registry needed
+- **Dynamic resource resolution** via `group` (required) plus optional `version` and `resource` filters — discovery-based, no static registry needed
 - **JSONB label filtering** via PostgreSQL containment (`@>`)
-- **RBAC enforcement**
-- **Structured latency logging** for every request (parse, rbac, query, serialize phases)
+- **Batch RBAC enforcement** via discovery → `rbac.UserCan()` batch check → filtered query
+- **Structured latency logging** for every request (parse, discovery, rbac, query, serialize phases)
 
 ## API
 
 ### Endpoint
 
 ```
-GET  /resources?group=<group>&version=<version>&resource=<resource>&namespace=<namespace>
+GET  /resources?group=<group>[&version=<version>][&resource=<resource>][&namespace=<namespace>]
 POST /resources
 ```
 
-The resource type is identified by three **required** parameters: `group`, `version`, and `resource`. These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural` in the `krateo_resources` table.
+The resource type is identified by the **required** `group` parameter. `version` and `resource` are optional filters that narrow the discovery query. These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural` in the `krateo_resources` table of the PostgreSQL database.
 
 ### Filters
 
@@ -33,19 +33,20 @@ All filters are optional and combined with `AND`.
 | Parameter | Type | Behavior |
 | --- | --- | --- |
 | `group` | string | **Required.** API group (e.g. `apps`, `widgets.templates.krateo.io`) |
-| `version` | string | **Required.** API version (e.g. `v1`, `v1beta1`) |
-| `resource` | string | **Required.** Resource plural name (e.g. `deployments`, `panels`). Lowercase. |
+| `version` | string | Optional. API version (e.g. `v1`, `v1beta1`). Narrows discovery. |
+| `resource` | string | Optional. Resource plural name (e.g. `deployments`, `panels`). Lowercase. Narrows discovery. |
 | `cluster` | string | Exact match on `cluster_name` |
-| `namespace` | string | Exact match on `namespace` |
+| `namespace` | string | Exact match on `namespace`. Default: `"default"`. Use `"*"` for all namespaces. See [Namespace Handling](#namespace-handling). |
 | `composition_id` | UUID | Exact match on `composition_id` |
-| `name` | string | Case-insensitive partial match (`ILIKE %name%`) |
+| `name` | string | Exact match on `resource_name`. Mutually exclusive with `name_contains`. |
+| `name_contains` | string | Case-insensitive partial match (`ILIKE %name_contains%`). Mutually exclusive with `name`. |
 | `labels` | JSON object | JSONB containment on `metadata.labels` (`@>`) |
 | `since` | RFC3339 | Resources with `updated_at >= since` |
 | `raw` | boolean | Include full Kubernetes object (default: `false`) |
-| `limit` | integer | Page size (default: `100`, max: `5000`) |
+| `limit` | integer | Page size (default: `100`). Use `-1` for unlimited (returns all results, no pagination). |
 | `cursor` | base64 | Opaque keyset cursor from previous response |
 
-GET uses query parameters. POST uses the same fields as a JSON body (with `labels` as a JSON object, not a string). Note: `kind` is not a query parameter — the `resource` (plural) field is used for filtering.
+GET uses query parameters. POST uses the same fields as a JSON body (with `labels` as a JSON object, not a string). Note: `kind` is not a query parameter — the `resource` (plural) field is used for filtering. Only `group` is required; all other fields are optional.
 
 ### Response
 
@@ -55,6 +56,7 @@ GET uses query parameters. POST uses the same fields as a JSON body (with `label
   "items": [
     {
       "name": "my-panel",
+      "uid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       "namespace": "krateo-system",
       "group": "widgets.templates.krateo.io",
       "version": "v1beta1",
@@ -73,13 +75,26 @@ GET uses query parameters. POST uses the same fields as a JSON body (with `label
 - `raw` appears only when `raw=true` is requested
 - `cursor` is absent on the last page or when results fit in a single page
 
+### Namespace Handling
+
+The `namespace` parameter follows Kubernetes API semantics:
+
+| Value | Behavior |
+| --- | --- |
+| *(absent/empty)* | Defaults to `"default"` — only resources in the `default` namespace are returned |
+| `*` | All namespaces — no namespace filter is applied. RBAC is still enforced, so only resources the user has access to will be returned. |
+| `prod`, `krateo-system`, etc. | Exact match on the specified namespace |
+
+This mirrors how `kubectl` works: commands target the `default` namespace unless `-n` or `--all-namespaces` is specified.
+
 ### Error Responses
 
 Kubernetes-style `Status` objects:
 
 | Code | Condition |
 | --- | --- |
-| `400` | Invalid/missing parameters (missing group/version/resource, bad UUID, JSON, timestamp, cursor) |
+| `400` | Invalid/missing parameters (missing group, bad UUID, JSON, timestamp, cursor) |
+| `403` | Forbidden — RBAC denied access to all discovered resources |
 | `405` | Method not allowed |
 | `500` | Internal server error |
 
@@ -113,6 +128,10 @@ go test ./internal/handlers/ -cover -v
 ```
 
 See [TESTING.md](TESTING.md) for detailed testing instructions.
+
+## Notes on RBAC
+
+TODO
 
 ## Health Probes
 

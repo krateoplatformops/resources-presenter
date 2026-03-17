@@ -12,6 +12,7 @@ import (
 )
 
 // TestListResources_MaxLimit verifies behavior at the maximum allowed limit (5000 rows).
+// Currently, the maxLimit of 5000 is not enforced.
 func TestListResources_MaxLimit(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -33,10 +34,10 @@ func TestListResources_MaxLimit(t *testing.T) {
 	}
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs(deploymentArgs(limit + 1)...).
+		WithArgs(deploymentArgs("default", limit+1)...).
 		WillReturnRows(rows)
 
-	params := deploymentParams(limit)
+	params := deploymentParams("default", limit)
 
 	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
@@ -76,10 +77,10 @@ func TestListResources_MaxLimitWithNextPage(t *testing.T) {
 	}
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs(deploymentArgs(limit + 1)...).
+		WithArgs(deploymentArgs("default", limit+1)...).
 		WillReturnRows(rows)
 
-	params := deploymentParams(limit)
+	params := deploymentParams("default", limit)
 
 	result, err := ListResources(context.Background(), mock, params)
 	if err != nil {
@@ -137,10 +138,10 @@ func TestListResources_RawLargePayload(t *testing.T) {
 	rows := pgxmock.NewRows(rawCols()).AddRows(row)
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs(deploymentArgs(51)...).
+		WithArgs(deploymentArgs("default", 51)...).
 		WillReturnRows(rows)
 
-	params := deploymentParams(50)
+	params := deploymentParams("default", 50)
 	params.Raw = true
 
 	result, err := ListResources(context.Background(), mock, params)
@@ -195,10 +196,10 @@ func TestListResources_ConcurrentAccess(t *testing.T) {
 			}
 
 			mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-				WithArgs(deploymentArgs(51)...).
+				WithArgs(deploymentArgs("default", 51)...).
 				WillReturnRows(rows)
 
-			params := deploymentParams(50)
+			params := deploymentParams("default", 50)
 
 			result, err := ListResources(context.Background(), mock, params)
 			if err != nil {
@@ -226,7 +227,7 @@ func TestListResources_ConcurrentAccess(t *testing.T) {
 }
 
 // TestBuildListQuery_AllFilterCombinations exhaustively tests that the builder
-// generates valid SQL for all 2^6 = 64 combinations of optional filters.
+// generates valid SQL for all 2^5 = 32 combinations of optional filters.
 func TestBuildListQuery_AllFilterCombinations(t *testing.T) {
 	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	cursor := EncodeCursor(&ResourcesCursor{
@@ -242,19 +243,18 @@ func TestBuildListQuery_AllFilterCombinations(t *testing.T) {
 
 	filters := []filter{
 		{"cluster", func(p *ListParams) { p.Cluster = "cluster-a" }, 1},
-		{"namespace", func(p *ListParams) { p.Namespace = "prod" }, 1},
 		{"composition_id", func(p *ListParams) { p.CompositionID = "550e8400-e29b-41d4-a716-446655440000" }, 1},
-		{"name", func(p *ListParams) { p.Name = "api" }, 1},
+		{"name_contains", func(p *ListParams) { p.NameContains = "api" }, 1},
 		{"labels", func(p *ListParams) { p.Labels = `{"app":"nginx"}` }, 1},
 		{"since", func(p *ListParams) { p.Since = &since }, 1},
 	}
 
-	// Iterate over all 2^6 = 64 bitmask combinations.
+	// Iterate over all 2^5 = 32 bitmask combinations.
 	for mask := 0; mask < (1 << len(filters)); mask++ {
-		p := deploymentParams(50)
+		p := deploymentParams("default", 50)
 
 		var names []string
-		expectedArgs := 3 // group + version + plural are always present
+		expectedArgs := 4 // group + version + IN(resource, namespace) are always present
 		for i, f := range filters {
 			if mask&(1<<i) != 0 {
 				f.apply(&p)

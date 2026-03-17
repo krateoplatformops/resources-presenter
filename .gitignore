@@ -45,3 +45,5 @@ PROGRESS.md
 
 # Benchmark output files
 benchmarks/
+
+latency_tests/

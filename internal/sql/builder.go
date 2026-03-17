@@ -41,13 +41,6 @@ func (b *Builder) Where(cond string, args ...any) {
 	b.args = append(b.args, args...)
 }
 
-// WhereRaw adds a WHERE condition without any arguments.
-// The condition is appended verbatim (no placeholder substitution).
-// Use this for static conditions like "deleted_at IS NULL".
-func (b *Builder) WhereRaw(cond string) {
-	b.where = append(b.where, cond)
-}
-
 // OrderBy sets the ORDER BY clause of the query.
 // The provided string is appended verbatim to the SQL.
 func (b *Builder) OrderBy(order string) {
@@ -55,7 +48,7 @@ func (b *Builder) OrderBy(order string) {
 }
 
 // Limit sets a LIMIT clause on the query.
-// If n is less than or equal to zero, it is ignored.
+// If n is less than or equal to zero, it is ignored and no LIMIT is applied.
 func (b *Builder) Limit(n int) {
 	if n > 0 {
 		b.limit = &n
