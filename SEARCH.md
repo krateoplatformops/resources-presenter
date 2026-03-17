@@ -23,6 +23,7 @@ The resource type is identified by the **required** `group` parameter, plus opti
 | `group` | `apps`, `widgets.templates.krateo.io` | **Yes** | Kubernetes API group |
 | `version` | `v1`, `v1beta1` | No | API version (narrows discovery) |
 | `resource` | `deployments`, `panels` | No | Resource plural name (lowercase, narrows discovery) |
+| `namespace` | `default`, `prod` | No | Kubernetes namespace (exact match) |
 
 These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural`.
 
@@ -37,12 +38,12 @@ All filters (except `group`) are optional and are combined with `AND`.
 | `group` | string | **Required.** API group. |
 | `version` | string | Optional. API version (narrows discovery). |
 | `resource` | string | Optional. Resource plural name (lowercase, narrows discovery). |
-| `cluster` | string | Exact match on `cluster_name`. |
-| `namespace` | string | Exact match on `namespace`. |
-| `composition_id` | UUID | Exact match on `composition_id`. Must be a valid RFC 4122 UUID. |
-| `name` | string | Exact match on `resource_name`. Mutually exclusive with `name_contains`. |
-| `name_contains` | string | Case-insensitive partial match on `resource_name` (`ILIKE %name_contains%`). Mutually exclusive with `name`. |
-| `labels` | JSON object (string) | JSONB containment on `raw->'metadata'->'labels'` (`@>`). Must be valid JSON. |
+| `namespace` | string | Optional. Exact match on `namespace`. Absent/empty defaults to `default`. `*` matches all namespaces (still filtered by RBAC). |
+| `cluster` | string | Optional. Exact match on `cluster_name`. |
+| `composition_id` | UUID | Optional. Exact match on `composition_id`. Must be a valid RFC 4122 UUID. |
+| `name` | string | Optional. Exact match on `resource_name`. Mutually exclusive with `name_contains`. |
+| `name_contains` | string | Optional. Case-insensitive partial match on `resource_name` (`ILIKE %name_contains%`). Mutually exclusive with `name`. |
+| `labels` | JSON object (string) | Optional. JSONB containment on `raw->'metadata'->'labels'` (`@>`). Must be valid JSON. |
 | `since` | RFC3339 timestamp | Includes resources with `updated_at >= since`. |
 | `raw` | boolean | If `true`, include the full `raw` JSONB field in the response. Default: `false`. |
 | `limit` | integer | Page size. Default: `100`. Use `-1` for unlimited (returns all results, no pagination). |
@@ -355,6 +356,7 @@ If you change filters between pages, pagination continuity is broken.
   - `created_at`: when the resource was first ingested (RFC3339)
   - `updated_at`: when the resource was last updated (RFC3339)
   - `composition_id`: Krateo composition UUID (omitted when null)
+  - `uid`: Kubernetes UID of the resource
   - `raw`: full Kubernetes object (only when `raw=true`)
 - `cursor`: present only if there are more pages; absent or empty on the last page
 

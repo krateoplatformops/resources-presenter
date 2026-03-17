@@ -43,7 +43,7 @@ type ListParams struct {
 
 	// AllowedTargets restricts the query to only these (resource, namespace) pairs.
 	// When set, it replaces the individual ResourcePlural and Namespace filters.
-	// Populated by the handler after RBAC filtering.
+	// Populated by the handler after discovery and RBAC filtering.
 	AllowedTargets []ResourceTarget
 }
 

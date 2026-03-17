@@ -34,9 +34,18 @@ type Authorizer interface {
 
 // ResourcesHandler returns an HTTP handler for GET/POST /resources.
 // The resource type is identified by query parameters:
-//   - group    → API group (required, e.g. "apps", "widgets.templates.krateo.io")
-//   - version  → API version (optional, e.g. "v1", "v1beta1")
-//   - resource → K8s plural resource name (optional, e.g. "panels", "deployments")
+//   - group     → API group (required, e.g. "apps", "widgets.templates.krateo.io")
+//   - version   → API version (optional, e.g. "v1", "v1beta1")
+//   - resource  → K8s plural resource name (optional, e.g. "panels", "deployments")
+//   - namespace → K8s namespace (optional, default "default", "*" for all namespaces)
+//
+// Additional filters to narrow down the query and RBAC targets:
+//   - cluster        → exact match on cluster_name
+//   - composition_id → filter by composition_id (UUID string)
+//   - name           → exact match on resource_name (mutually exclusive with 'name_contains')
+//   - name_contains  → case-insensitive partial match on resource_name (mutually exclusive with 'name')
+//   - labels         → JSON object for label filtering (e.g. {"env": "prod", "tier": "frontend"})
+//   - since          → RFC3339 timestamp to filter resources created after that time
 //
 // GET uses query parameters; POST uses a JSON body with the same fields.
 //
@@ -55,7 +64,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 		// NOTE on latency measurement:
 		//
 		// totalStart marks the beginning of the handler. It does NOT include
-		// time spent in upstream middleware (TraceId → Access → CORS → UserConfig).
+		// time spent in upstream middleware (TraceId → Access → CORS → GZip → UserConfig).
 		// In particular, the UserConfig middleware (JWT validation + fetching the
 		// user's clientconfig Secret from the Kubernetes API) runs BEFORE this
 		// handler and can add significant latency.
@@ -65,7 +74,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 		//
 		//   Access.latency  =  UserConfig time  +  handler 6_total time
 		//
-		// The gap between Access.latency and 6_total is the UserConfig middleware.
+		// The gap between Access.latency and 6_total is mostly the UserConfig middleware.
 		totalStart := time.Now()
 
 		ctx := xcontext.BuildContext(r.Context())
@@ -84,7 +93,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 			queryErr         error
 		)
 
-		// Every request gets logged in detail, then there is also the higher-level access log due to the middleware.
+		// Every request gets logged in detail, then there is also the higher-level access log due to the Access middleware.
 		defer func() {
 			totalDuration := time.Since(totalStart)
 			lvl := slog.LevelDebug
@@ -324,7 +333,7 @@ func parseListParams(r *http.Request) (sql.ListParams, error) {
 
 	// Namespace handling follows Kubernetes API semantics:
 	// - absent/empty → "default" (like kubectl)
-	// - "*"          → all namespaces (no filter)
+	// - "*"          → all namespaces (still filtered by RBAC)
 	// - any other    → exact match
 	namespace := q.Get("namespace")
 	switch namespace {
@@ -381,7 +390,7 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 
 	var payload resourcesJSONPayload
 	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
+	dec.DisallowUnknownFields() // Reject unknown fields to prevent silent typos.
 
 	if err := dec.Decode(&payload); err != nil {
 		if err == io.EOF {
@@ -435,7 +444,7 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 
 	// Namespace handling follows Kubernetes API semantics:
 	// - absent/empty → "default" (like kubectl)
-	// - "*"          → all namespaces (no filter)
+	// - "*"          → all namespaces (still filtered by RBAC)
 	// - any other    → exact match
 	namespace := payload.Namespace
 	switch namespace {

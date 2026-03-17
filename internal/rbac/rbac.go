@@ -43,19 +43,17 @@ func (RbacAuthorizer) FilterAllowed(ctx context.Context, targets []sql.ResourceT
 	var allowed []sql.ResourceTarget
 	for i, t := range targets {
 		if decisions[ucts[i]] {
-			log.Printf("RBAC ALLOWED: group=%s resource=%s namespace=%s\n", t.Group, t.Resource, t.Namespace)
+			log.Printf("RBAC ALLOWED: (group=%s resource=%s namespace=%s)\n", t.Group, t.Resource, t.Namespace)
 			allowed = append(allowed, t)
 		} else {
-			log.Printf("RBAC DENIED: group=%s resource=%s namespace=%s\n", t.Group, t.Resource, t.Namespace)
+			log.Printf("RBAC DENIED: (group=%s resource=%s namespace=%s)\n", t.Group, t.Resource, t.Namespace)
 		}
 	}
 
 	// log allowed targets just for testing
 	log.Print("==========BEGIN ALLOWED LIST ===========\n")
 	for _, t := range allowed {
-		log.Print("=====================\n")
-		log.Printf("FINAL FILTERED ALLOWED: group=%s resource=%s namespace=%s\n", t.Group, t.Resource, t.Namespace)
-		log.Print("=====================\n")
+		log.Printf("FINAL FILTERED ALLOWED: (group=%s resource=%s namespace=%s)\n", t.Group, t.Resource, t.Namespace)
 	}
 	log.Print("==========END ALLOWED LIST ===========\n")
 
