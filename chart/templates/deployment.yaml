@@ -7,8 +7,8 @@ Validation block
 {{- $dbSecret := .Values.dbSecret | default dict }}
 {{- $dbSecretName := $dbSecret.name | default "" }}
 
-{{- $signKeySecret := .Values.signKeySecret | default dict }}
-{{- $signKeySecretName := $signKeySecret.name | default "" }}
+{{- $jwtSignKeySecret := .Values.jwtSignKeySecret | default dict }}
+{{- $jwtSignKeySecretName := $jwtSignKeySecret.name | default "" }}
 
 {{- if and (not (hasKey $config "DB_USER")) (eq $dbSecretName "") }}
 {{- fail "DB_USER must be set either in config or via dbSecret.name" }}
@@ -18,8 +18,8 @@ Validation block
 {{- fail "DB_PASS must be set either in config or via dbSecret.name" }}
 {{- end }}
 
-{{- if and (not (hasKey $config "SIGN_KEY")) (eq $signKeySecretName "") }}
-{{- fail "SIGN_KEY must be set either in config or via signKeySecret.name" }}
+{{- if and (not (hasKey $config "JWT_SIGN_KEY")) (eq $jwtSignKeySecretName "") }}
+{{- fail "JWT_SIGN_KEY must be set either in config or via jwtSignKeySecret.name" }}
 {{- end }}
 
 apiVersion: apps/v1
@@ -84,12 +84,12 @@ spec:
                 key: DB_PASS
           {{- end }}
 
-          {{- if and (not (hasKey $config "SIGN_KEY")) (ne $signKeySecretName "") }}
-          - name: SIGN_KEY
+          {{- if and (not (hasKey $config "JWT_SIGN_KEY")) (ne $jwtSignKeySecretName "") }}
+          - name: JWT_SIGN_KEY
             valueFrom:
               secretKeyRef:
-                name: {{ $signKeySecretName }}
-                key: SIGN_KEY
+                name: {{ $jwtSignKeySecretName }}
+                key: JWT_SIGN_KEY
           {{- end }}
 
           ports:

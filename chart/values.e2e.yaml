@@ -29,7 +29,7 @@ config:
   DB_READY_TIMEOUT: "2m"
 
   # Authentication
-  SIGN_KEY: "e2e-test-sign-key"
+  JWT_SIGN_KEY: "e2e-test-sign-key"
   AUTHN_NS: "krateo-system"
 
 # Faster probes for testing (don't wait 45s)

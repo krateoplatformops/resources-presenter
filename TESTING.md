@@ -148,7 +148,7 @@ You should see:
 `krateoctl add-user` generates a signed JWT **and** creates a `{username}-clientconfig` Secret in Kubernetes with a client certificate for RBAC.
 
 ```bash
-# The SIGN_KEY must match the one in values.e2e.yaml
+# The JWT_SIGN_KEY must match the one in values.e2e.yaml
 # NOTE: flags MUST come before the positional argument (username).
 TOKEN=$(krateoctl add-user \
   -n krateo-system \

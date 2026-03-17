@@ -78,8 +78,8 @@ func Setup() *Config {
 		"maximum time to wait for PostgreSQL to become ready",
 	)
 
-	cfgSignKey := flag.String("sign-key",
-		env.String("SIGN_KEY", ""),
+	cfgjwtSignKey := flag.String("jwt-sign-key",
+		env.String("JWT_SIGN_KEY", ""),
 		"Signing key for JWT validation",
 	)
 
@@ -101,7 +101,7 @@ func Setup() *Config {
 	cfg.Port = *cfgPort
 	cfg.Debug = *cfgDebug
 	cfg.DbReadyTimeout = *cfgDbReadyTimeout
-	cfg.SigningKey = *cfgSignKey
+	cfg.SigningKey = *cfgjwtSignKey
 	cfg.AuthnNS = *cfgAuthnNS
 	// RBAC CACHE TTL
 	// RBAC CACHE MAX ENTRIES
