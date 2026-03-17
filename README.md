@@ -129,6 +129,10 @@ go test ./internal/handlers/ -cover -v
 
 See [TESTING.md](TESTING.md) for detailed testing instructions.
 
+## Notes on RBAC
+
+TODO
+
 ## Health Probes
 
 ```

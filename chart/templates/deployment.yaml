@@ -3,15 +3,23 @@ Validation block
 */ -}}
 
 {{- $config := .Values.config | default dict }}
-{{- $secret := .Values.secret | default dict }}
-{{- $secretName := $secret.name | default "" }}
 
-{{- if and (not (hasKey $config "DB_USER")) (eq $secretName "") }}
-{{- fail "DB_USER must be set either in config or via secret.name" }}
+{{- $dbSecret := .Values.dbSecret | default dict }}
+{{- $dbSecretName := $dbSecret.name | default "" }}
+
+{{- $signKeySecret := .Values.signKeySecret | default dict }}
+{{- $signKeySecretName := $signKeySecret.name | default "" }}
+
+{{- if and (not (hasKey $config "DB_USER")) (eq $dbSecretName "") }}
+{{- fail "DB_USER must be set either in config or via dbSecret.name" }}
 {{- end }}
 
-{{- if and (not (hasKey $config "DB_PASS")) (eq $secretName "") }}
-{{- fail "DB_PASS must be set either in config or via secret.name" }}
+{{- if and (not (hasKey $config "DB_PASS")) (eq $dbSecretName "") }}
+{{- fail "DB_PASS must be set either in config or via dbSecret.name" }}
+{{- end }}
+
+{{- if and (not (hasKey $config "SIGN_KEY")) (eq $signKeySecretName "") }}
+{{- fail "SIGN_KEY must be set either in config or via signKeySecret.name" }}
 {{- end }}
 
 apiVersion: apps/v1
@@ -60,20 +68,28 @@ spec:
             value: {{ $v | quote }}
           {{- end }}
 
-          {{- if and (not (hasKey $config "DB_USER")) (ne $secretName "") }}
+          {{- if and (not (hasKey $config "DB_USER")) (ne $dbSecretName "") }}
           - name: DB_USER
             valueFrom:
               secretKeyRef:
-                name: {{ $secretName }}
+                name: {{ $dbSecretName }}
                 key: DB_USER
           {{- end }}
 
-          {{- if and (not (hasKey $config "DB_PASS")) (ne $secretName "") }}
+          {{- if and (not (hasKey $config "DB_PASS")) (ne $dbSecretName "") }}
           - name: DB_PASS
             valueFrom:
               secretKeyRef:
-                name: {{ $secretName }}
+                name: {{ $dbSecretName }}
                 key: DB_PASS
+          {{- end }}
+
+          {{- if and (not (hasKey $config "SIGN_KEY")) (ne $signKeySecretName "") }}
+          - name: SIGN_KEY
+            valueFrom:
+              secretKeyRef:
+                name: {{ $signKeySecretName }}
+                key: SIGN_KEY
           {{- end }}
 
           ports:

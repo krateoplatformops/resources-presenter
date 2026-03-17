@@ -13,7 +13,7 @@ image:
   tag: "dev"
 
 # DB credentials inline — no external secret needed for E2E.
-secret:
+dbSecret:
   name: ""
 
 config:

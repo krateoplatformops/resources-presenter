@@ -6,7 +6,7 @@ resources:
     cpu: 500m
     memory: 512Mi
 
-secret:
+dbSecret:
   name: events-stack-db
 
 config:
