@@ -58,7 +58,7 @@ GET uses query parameters. POST uses the same fields as a JSON body (with `label
 
 ```json
 {
-  "count": 1,
+  "count": 2,
   "items": [
     {
       "name": "my-panel",
@@ -72,13 +72,26 @@ GET uses query parameters. POST uses the same fields as a JSON body (with `label
       "cluster_name": "prod-eu",
       "created_at": "2026-03-01T10:00:00Z",
       "updated_at": "2026-03-06T14:30:00Z"
+    },
+    {
+      "name": "my-panel-2",
+      "uid": "b2c3d4e5-f6a7-8901-bcde-f2345678901a",
+      "global_uid": "prod-eu:b2c3d4e5-f6a7-8901-bcde-f2345678901a",
+      "namespace": "krateo-system",
+      "group": "widgets.templates.krateo.io",
+      "version": "v1beta1",
+      "kind": "Panel",
+      "resource": "panels",
+      "cluster_name": "prod-eu",
+      "created_at": "2026-03-02T11:00:00Z",
+      "updated_at": "2026-03-07T15:30:00Z"
     }
   ],
   "cursor": "<base64-opaque-token>"
 }
 ```
 
-- `global_uid` is always present — composite key in `cluster_name:uid` format, uniquely identifies a resource across clusters
+- `global_uid` is always present: composite key in `cluster_name:uid` format, uniquely identifies a resource across clusters
 - `composition_id` appears only when set (non-null)
 - `raw` appears only when `raw=true` is requested
 - `cursor` is absent on the last page or when results fit in a single page
@@ -105,7 +118,7 @@ The `global_uid` is returned in every list response item, so clients can use it 
 
 This endpoint does **not** support any of the list filters (`group`, `version`, `resource`, `cluster`, `namespace`, `name`, `name_contains`, `labels`, `since`, `limit`, `cursor`). It takes only the `global_uid` path parameter and an optional `raw` query parameter.
 
-#### Query parameters (detail only)
+#### Query parameters
 
 | Parameter | Type | Default | Behavior |
 | --- | --- | --- | --- |
@@ -151,8 +164,8 @@ Kubernetes-style `Status` objects:
 | --- | --- | --- |
 | `400` | List | Invalid/missing parameters (missing group, bad UUID, JSON, timestamp, cursor) |
 | `400` | Detail | Missing `global_uid` path parameter |
-| `403` | List | Forbidden — RBAC denied access to all discovered resources |
-| `403` | Detail | Forbidden — RBAC denied access to the requested resource |
+| `403` | List | Forbidden: RBAC denied access to all discovered resources |
+| `403` | Detail | Forbidden: RBAC denied access to the requested resource |
 | `404` | Detail | Resource not found — no active resource matches the given `global_uid` |
 | `405` | List | Method not allowed (only GET and POST) |
 | `405` | Detail | Method not allowed (only GET) |
@@ -191,7 +204,8 @@ See [TESTING.md](TESTING.md) for detailed testing instructions.
 
 ## Notes on RBAC
 
-TODO
+RBAC is enforced at resource level and not on the single object.
+For instance, if a user has access to `widgets.templates.krateo.io/panels` then they can see all the panels, but if they don't have access to `widgets.templates.krateo.io/panels` then they can't see any panel, even if they have access to a specific panel object.
 
 ## Health Probes
 
