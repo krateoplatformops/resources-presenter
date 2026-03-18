@@ -206,6 +206,7 @@ See [TESTING.md](TESTING.md) for detailed testing instructions.
 
 RBAC is enforced at resource level and not on the single object.
 For instance, if a user has access to `widgets.templates.krateo.io/panels` then they can see all the panels, but if they don't have access to `widgets.templates.krateo.io/panels` then they can't see any panel, even if they have access to a specific panel object.
+This practically means that RBAC is enforced on the resource type (group/version/resource) and not on the single object and so for a user to have access to a specific object they need to have access to the whole resource type.
 
 ## Health Probes
 
