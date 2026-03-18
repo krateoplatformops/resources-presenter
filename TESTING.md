@@ -22,7 +22,7 @@ Integration tests use `testcontainers-go` to spin up a real PostgreSQL container
 **Requires:** Docker running.
 
 ```bash
-# Handler layer (pagination, filtering, RBAC mock, POST, validation)
+# Handler layer (pagination, filtering, RBAC mock, POST, validation, list + detail endpoints)
 go test ./internal/handlers/ -v -cover
 
 # All tests (unit + integration)
@@ -278,6 +278,24 @@ curl -s -X POST http://localhost:8080/resources \
   }' | jq
 ```
 
+**Detail endpoint** (`GET /resources/{global_uid}`):
+
+```bash
+# Get a resource's global_uid from the list response, then fetch its detail
+GLOBAL_UID=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&limit=1' \
+  | jq -r '.items[0].global_uid')
+echo "GLOBAL_UID=$GLOBAL_UID"
+
+# Fetch detail (raw included by default)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/resources/$GLOBAL_UID" | jq
+
+# Fetch detail without raw
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/resources/$GLOBAL_UID?raw=false" | jq
+```
+
 **Expected error cases:**
 
 ```bash
@@ -295,6 +313,10 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 # Namespace does not exist → 200 empty result (no resources discovered)
 curl -s -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=nonexistent' | jq
+
+# Detail: non-existent global_uid → 404
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources/nonexistent-cluster:nonexistent-uid' | jq
 ```
 
 Stop port-forwarding:
@@ -328,6 +350,13 @@ kubectl port-forward svc/resources-presenter 8080:8080 -n krateo-system &
 curl -s http://localhost:8080/readyz | jq
 curl -s -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system' | jq
+
+# Detail endpoint (use global_uid from list response)
+GLOBAL_UID=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&limit=1' \
+  | jq -r '.items[0].global_uid')
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/resources/$GLOBAL_UID" | jq
 
 # Teardown
 kind delete cluster --name krateo-e2e

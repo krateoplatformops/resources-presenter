@@ -246,6 +246,155 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 	}
 }
 
+// ResourceDetailHandler returns an HTTP handler for GET /resources/{global_uid}.
+// It fetches a single resource by its global_uid and returns it in the same
+// response format as the list endpoint (count + items array).
+//
+// Query parameters:
+//   - raw → include full Kubernetes object (default: true)
+//
+// The handler flow:
+//  1. Parse and validate path parameter (global_uid)
+//  2. Query: fetch resource by global_uid
+//  3. RBAC: check permissions on the fetched resource's (group, resource, namespace)
+//  4. Serialize and return response
+//
+// Returns 400 for missing global_uid, 404 if not found, 403 if RBAC denied.
+func ResourceDetailHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		totalStart := time.Now()
+
+		ctx := xcontext.BuildContext(r.Context())
+		traceId := xcontext.TraceId(ctx, false)
+
+		var (
+			globalUID     string
+			statusCode    int
+			parseDuration time.Duration
+			queryDuration time.Duration
+			rbacDuration  time.Duration
+			serDuration   time.Duration
+			queryErr      error
+		)
+
+		defer func() {
+			totalDuration := time.Since(totalStart)
+			lvl := slog.LevelDebug
+			if statusCode >= 500 {
+				lvl = slog.LevelError
+			} else if statusCode >= 400 {
+				lvl = slog.LevelWarn
+			}
+
+			attrs := []slog.Attr{
+				slog.String("handler", "resource_detail"),
+				slog.String("method", r.Method),
+				slog.String("global_uid", globalUID),
+				slog.String("trace_id", traceId),
+				slog.Int("status_code", statusCode),
+				slog.Group("handler_duration_ms",
+					slog.Float64("1_parse", float64(parseDuration.Microseconds())/1000.0),
+					slog.Float64("2_query", float64(queryDuration.Microseconds())/1000.0),
+					slog.Float64("3_rbac_authz", float64(rbacDuration.Microseconds())/1000.0),
+					slog.Float64("4_serialize", float64(serDuration.Microseconds())/1000.0),
+					slog.Float64("5_total", float64(totalDuration.Microseconds())/1000.0),
+				),
+			}
+			if queryErr != nil {
+				attrs = append(attrs, slog.Any("err", queryErr))
+			}
+
+			log.LogAttrs(r.Context(), lvl, "request completed by handler", attrs...)
+		}()
+
+		if r.Method != http.MethodGet {
+			statusCode = http.StatusMethodNotAllowed
+			w.Header().Set("Allow", "GET")
+			response.Encode(w, response.New(http.StatusMethodNotAllowed, fmt.Errorf("method not allowed")))
+			return
+		}
+
+		// --- Phase 1: Parse path parameter ---
+		parseStart := time.Now()
+
+		globalUID = r.PathValue("global_uid")
+		if globalUID == "" {
+			parseDuration = time.Since(parseStart)
+			statusCode = http.StatusBadRequest
+			response.Encode(w, response.New(http.StatusBadRequest, fmt.Errorf("global_uid path parameter is required")))
+			return
+		}
+
+		// raw defaults to true for the detail endpoint.
+		includeRaw := true
+		if r.URL.Query().Get("raw") == "false" {
+			includeRaw = false
+		}
+
+		parseDuration = time.Since(parseStart)
+
+		// --- Phase 2: DB query ---
+		queryStart := time.Now()
+
+		queryCtx, queryCancel := context.WithTimeout(r.Context(), queryTimeout)
+		defer queryCancel()
+
+		result, err := sql.GetByGlobalUID(queryCtx, db, globalUID, includeRaw)
+		queryDuration = time.Since(queryStart)
+		if err != nil {
+			queryErr = err
+			statusCode = http.StatusInternalServerError
+			response.InternalError(w, fmt.Errorf("internal server error"))
+			return
+		}
+
+		if result.Count == 0 {
+			statusCode = http.StatusNotFound
+			response.Encode(w, response.New(http.StatusNotFound, fmt.Errorf("resource not found: %s", globalUID)))
+			return
+		}
+
+		// --- Phase 3: RBAC authorization ---
+		rbacStart := time.Now()
+
+		item := result.Items[0]
+		targets := []sql.ResourceTarget{
+			{Group: item.Group, Resource: item.Resource, Namespace: item.Namespace},
+		}
+		allowed := auth.FilterAllowed(r.Context(), targets)
+		rbacDuration = time.Since(rbacStart)
+
+		if len(allowed) == 0 {
+			log.Debug("RBAC denied access to resource", slog.String("global_uid", globalUID), slog.String("trace_id", traceId))
+			statusCode = http.StatusForbidden
+			response.Encode(w, response.New(http.StatusForbidden, fmt.Errorf("forbidden: insufficient permissions")))
+			return
+		}
+
+		// --- Phase 4: Serialize ---
+		serializeStart := time.Now()
+
+		data, err := json.Marshal(result)
+		if err != nil {
+			queryErr = fmt.Errorf("serialize: %w", err)
+			statusCode = http.StatusInternalServerError
+			response.InternalError(w, fmt.Errorf("response serialization failed"))
+			serDuration = time.Since(serializeStart)
+			return
+		}
+
+		statusCode = http.StatusOK
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if _, err := w.Write(data); err != nil {
+			log.Debug("client write error", slog.Any("err", err), slog.String("trace_id", traceId))
+		}
+
+		serDuration = time.Since(serializeStart)
+	}
+}
+
 // handlerError carries an HTTP status and message for parse-phase errors.
 type handlerError struct {
 	status int

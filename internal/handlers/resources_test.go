@@ -1228,6 +1228,217 @@ func TestResourcesPOST_RBACDenied(t *testing.T) {
 	}
 }
 
+// --- Integration tests: ResourceDetailHandler (GET /resources/{global_uid}) ---
+
+func TestResourceDetail_Found(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedResources(t, db, seedOptions{
+		Cluster:         "cluster-a",
+		Namespace:       "default",
+		ResourceGroup:   "apps",
+		ResourceVersion: "v1",
+		ResourceKind:    "Deployment",
+		ResourcePlural:  "deployments",
+		Count:           3,
+		StartTime:       now,
+		Delta:           time.Second,
+	})
+
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+
+	// Fetch a specific resource by global_uid (format: cluster:uid).
+	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-0001", nil)
+	req.SetPathValue("global_uid", "cluster-a:uid-0001")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	count, _ := resp["count"].(float64)
+	if count != 1 {
+		t.Fatalf("expected count=1, got %v", count)
+	}
+
+	items := extractItems(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+
+	item := items[0].(map[string]any)
+	if item["global_uid"] != "cluster-a:uid-0001" {
+		t.Errorf("expected global_uid=cluster-a:uid-0001, got %v", item["global_uid"])
+	}
+
+	// raw=true by default on detail endpoint.
+	if _, ok := item["raw"]; !ok {
+		t.Error("expected raw field to be present by default on detail endpoint")
+	}
+}
+
+func TestResourceDetail_RawFalse(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedResources(t, db, seedOptions{
+		Cluster:         "cluster-a",
+		Namespace:       "default",
+		ResourceGroup:   "apps",
+		ResourceVersion: "v1",
+		ResourceKind:    "Deployment",
+		ResourcePlural:  "deployments",
+		Count:           1,
+		StartTime:       now,
+		Delta:           time.Second,
+	})
+
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+
+	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-0000?raw=false", nil)
+	req.SetPathValue("global_uid", "cluster-a:uid-0000")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	items := extractItems(t, resp)
+	first := items[0].(map[string]any)
+	if _, ok := first["raw"]; ok {
+		t.Error("expected no raw field when raw=false")
+	}
+}
+
+func TestResourceDetail_NotFound(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+
+	req := httptest.NewRequest("GET", "/resources/cluster-x:uid-missing", nil)
+	req.SetPathValue("global_uid", "cluster-x:uid-missing")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestResourceDetail_RBACDenied(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedResources(t, db, seedOptions{
+		Cluster:         "cluster-a",
+		Namespace:       "default",
+		ResourceGroup:   "apps",
+		ResourceVersion: "v1",
+		ResourceKind:    "Deployment",
+		ResourcePlural:  "deployments",
+		Count:           1,
+		StartTime:       now,
+		Delta:           time.Second,
+	})
+
+	handler := ResourceDetailHandler(db, testLogger(), denyAllAuthorizer{})
+
+	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-0000", nil)
+	req.SetPathValue("global_uid", "cluster-a:uid-0000")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestResourceDetail_MethodNotAllowed(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+
+	req := httptest.NewRequest("POST", "/resources/cluster-a:uid-0000", nil)
+	req.SetPathValue("global_uid", "cluster-a:uid-0000")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestResourcesList_GlobalUIDInResponse verifies that global_uid is returned in the list endpoint response.
+func TestResourcesList_GlobalUIDInResponse(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedResources(t, db, seedOptions{
+		Cluster:         "cluster-a",
+		Namespace:       "default",
+		ResourceGroup:   "apps",
+		ResourceVersion: "v1",
+		ResourceKind:    "Deployment",
+		ResourcePlural:  "deployments",
+		Count:           1,
+		StartTime:       now,
+		Delta:           time.Second,
+	})
+
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+
+	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
+		"namespace": "default",
+	})
+	items := extractItems(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+
+	first := items[0].(map[string]any)
+	globalUID, ok := first["global_uid"]
+	if !ok {
+		t.Fatal("expected global_uid field in list response")
+	}
+	gStr, _ := globalUID.(string)
+	if gStr == "" {
+		t.Fatal("expected non-empty global_uid")
+	}
+}
+
 // --- Helpers ---
 
 func setupTestPostgres(t *testing.T) (*pgxpool.Pool, func()) {

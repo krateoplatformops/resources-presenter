@@ -68,6 +68,7 @@ func main() {
 
 	auth := rbac.RbacAuthorizer{}
 	mux.Handle("/resources", authChain.Then(handlers.ResourcesHandler(pool, cfg.Log, auth)))
+	mux.Handle("GET /resources/{global_uid}", authChain.Then(handlers.ResourceDetailHandler(pool, cfg.Log, auth)))
 
 	server := &http.Server{
 		Addr:         ":" + strconv.Itoa(cfg.Port),
