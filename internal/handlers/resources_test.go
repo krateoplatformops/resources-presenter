@@ -828,14 +828,14 @@ func TestParseRequest(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "group only is valid (namespace defaults to default)",
-			url:        "/resources?group=apps",
-			wantGroup:  "apps",
+			name:      "group only is valid (namespace defaults to default)",
+			url:       "/resources?group=apps",
+			wantGroup: "apps",
 		},
 		{
-			name:       "group + version is valid",
-			url:        "/resources?group=apps&version=v1",
-			wantGroup:  "apps",
+			name:      "group + version is valid",
+			url:       "/resources?group=apps&version=v1",
+			wantGroup: "apps",
 		},
 		{
 			name:       "group + resource is valid",
@@ -1748,6 +1748,119 @@ INSERT INTO krateo_resources (
 		)
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// --- Unit tests for shared helpers ---
+
+func TestDurationMs(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want float64
+	}{
+		{0, 0},
+		{time.Millisecond, 1.0},
+		{500 * time.Microsecond, 0.5},
+		{1500 * time.Microsecond, 1.5},
+		{time.Second, 1000.0},
+	}
+	for _, tt := range tests {
+		got := durationMs(tt.d)
+		if got != tt.want {
+			t.Errorf("durationMs(%v) = %v, want %v", tt.d, got, tt.want)
+		}
+	}
+}
+
+func TestNormalizeNamespace(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", "default"},
+		{"*", ""},
+		{"prod", "prod"},
+		{"krateo-system", "krateo-system"},
+		{"default", "default"},
+	}
+	for _, tt := range tests {
+		got := normalizeNamespace(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeNamespace(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestValidateListParams(t *testing.T) {
+	tests := []struct {
+		name    string
+		params  sqlpkg.ListParams
+		wantErr string // substring, empty means no error
+	}{
+		{
+			name:   "valid params",
+			params: sqlpkg.ListParams{ResourceGroup: "apps", Namespace: "default"},
+		},
+		{
+			name:    "invalid composition_id",
+			params:  sqlpkg.ListParams{ResourceGroup: "apps", CompositionID: "not-a-uuid"},
+			wantErr: "invalid composition_id",
+		},
+		{
+			name:    "name and name_contains mutually exclusive",
+			params:  sqlpkg.ListParams{ResourceGroup: "apps", Name: "foo", NameContains: "bar"},
+			wantErr: "mutually exclusive",
+		},
+		{
+			name:   "valid composition_id",
+			params: sqlpkg.ListParams{ResourceGroup: "apps", CompositionID: "550e8400-e29b-41d4-a716-446655440000"},
+		},
+		{
+			name:    "invalid cursor",
+			params:  sqlpkg.ListParams{ResourceGroup: "apps", Cursor: sqlpkg.EncodedCursor("!!!not-base64!!!")},
+			wantErr: "invalid cursor",
+		},
+		{
+			name:   "valid cursor",
+			params: sqlpkg.ListParams{ResourceGroup: "apps", Cursor: sqlpkg.EncodeCursor(&sqlpkg.ResourcesCursor{UpdatedAt: time.Now(), ID: 1})},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateListParams(&tt.params)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got: %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestBuildGVR(t *testing.T) {
+	tests := []struct {
+		group, version, plural string
+		want                   string
+	}{
+		{"", "", "", ""},
+		{"apps", "", "", "apps"},
+		{"apps", "v1", "", "apps/v1"},
+		{"apps", "", "deployments", "apps.deployments"},
+		{"apps", "v1", "deployments", "apps/v1.deployments"},
+		{"widgets.templates.krateo.io", "v1beta1", "panels", "widgets.templates.krateo.io/v1beta1.panels"},
+	}
+	for _, tt := range tests {
+		got := buildGVR(tt.group, tt.version, tt.plural)
+		if got != tt.want {
+			t.Errorf("buildGVR(%q, %q, %q) = %q, want %q", tt.group, tt.version, tt.plural, got, tt.want)
 		}
 	}
 }
