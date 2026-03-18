@@ -3,7 +3,7 @@ package handlers
 import (
 	"compress/gzip"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -23,18 +23,15 @@ func Gzip() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-				log.Println("Client DOES NOT support gzip, serving uncompressed response") // to be removed after testing
-				next.ServeHTTP(w, r)                                                       // Client doesn't support gzip, serve uncompressed.
+				next.ServeHTTP(w, r)
 				return
 			}
-
-			log.Println("Client supports gzip, serving compressed response") // to be removed after testing
 
 			gz := gzipPool.Get().(*gzip.Writer)
 			gz.Reset(w)
 			defer func() {
 				if err := gz.Close(); err != nil {
-					log.Printf("gzip close error: %v", err)
+					slog.Debug("gzip close error", slog.Any("err", err))
 				}
 				gzipPool.Put(gz)
 			}()

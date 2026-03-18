@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -20,8 +19,8 @@ type Querier interface {
 // discovered from the database. Used for RBAC target enumeration and for
 // restricting query results to allowed resources.
 type ResourceTarget struct {
-	Group     string // resource_group
-	Resource  string // resource_plural
+	Group     string // resource_group column in krateo_resources table of the database
+	Resource  string // resource_plural column in krateo_resources table of the database
 	Namespace string
 }
 
@@ -89,6 +88,7 @@ type rowCursor struct {
 func DiscoverTargets(ctx context.Context, db Querier, p ListParams) ([]ResourceTarget, error) {
 	b := NewBuilder()
 
+	b.Where("deleted_at IS NULL")
 	b.Where("resource_group = ?", p.ResourceGroup)
 	if p.ResourceVersion != "" {
 		b.Where("resource_version = ?", p.ResourceVersion)
@@ -96,7 +96,6 @@ func DiscoverTargets(ctx context.Context, db Querier, p ListParams) ([]ResourceT
 	if p.ResourcePlural != "" {
 		b.Where("resource_plural = ?", p.ResourcePlural)
 	}
-	b.Where("deleted_at IS NULL")
 	if p.Cluster != "" {
 		b.Where("cluster_name = ?", p.Cluster)
 	}
@@ -240,6 +239,9 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 func buildListQuery(p ListParams) (string, []any, error) {
 	b := NewBuilder()
 
+	// Soft-delete filter: only return active rows.
+	b.Where("deleted_at IS NULL")
+
 	// Group is always required.
 	b.Where("resource_group = ?", p.ResourceGroup)
 
@@ -258,14 +260,7 @@ func buildListQuery(p ListParams) (string, []any, error) {
 			args = append(args, t.Resource, t.Namespace)
 		}
 		b.Where(fmt.Sprintf("(resource_plural, namespace) IN (%s)", strings.Join(parts, ", ")), args...)
-	} else {
-		// log a warning just for testing, to be removed
-		log.Println("WARNING: no RBAC targets")
-		log.Println("WARNING: probably we will not arrive here in e2e because the handler should enforce discovery+RBAC before this")
 	}
-
-	// Soft-delete filter: only return active rows.
-	b.Where("deleted_at IS NULL")
 
 	if p.Cluster != "" {
 		b.Where("cluster_name = ?", p.Cluster)

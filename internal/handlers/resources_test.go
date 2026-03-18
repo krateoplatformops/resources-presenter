@@ -37,6 +37,26 @@ func (denyAllAuthorizer) FilterAllowed(ctx context.Context, targets []sqlpkg.Res
 	return nil
 }
 
+// selectiveAuthorizer allows only targets whose (Group, Resource, Namespace)
+// tuple exists in the Allowed set. This enables partial-RBAC tests where
+// the user has access to some resource types/namespaces but not others.
+type selectiveAuthorizer struct {
+	Allowed []sqlpkg.ResourceTarget
+}
+
+func (a selectiveAuthorizer) FilterAllowed(_ context.Context, targets []sqlpkg.ResourceTarget) []sqlpkg.ResourceTarget {
+	var out []sqlpkg.ResourceTarget
+	for _, t := range targets {
+		for _, ok := range a.Allowed {
+			if t.Group == ok.Group && t.Resource == ok.Resource && t.Namespace == ok.Namespace {
+				out = append(out, t)
+				break
+			}
+		}
+	}
+	return out
+}
+
 // testLogger returns a discard logger for tests.
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -1228,6 +1248,287 @@ func TestResourcesPOST_RBACDenied(t *testing.T) {
 	}
 }
 
+// --- Integration tests: partial RBAC (selectiveAuthorizer) ---
+
+// TestRBAC_PartialNamespaceAccess seeds deployments in two namespaces,
+// grants RBAC access to only one, and verifies that only the allowed
+// namespace's resources are returned.
+func TestRBAC_PartialNamespaceAccess(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	// Use different clusters to avoid global_uid collision (global_uid = cluster:uid-NNNN).
+	// RBAC checks (group, resource, namespace) — not cluster — so this is valid.
+	seedResources(t, db, seedOptions{
+		Cluster: "rbac-prod", Namespace: "prod",
+		ResourceGroup: "apps", ResourceVersion: "v1",
+		ResourceKind: "Deployment", ResourcePlural: "deployments",
+		Count: 5, StartTime: now, Delta: time.Second,
+	})
+	seedResources(t, db, seedOptions{
+		Cluster: "rbac-stg", Namespace: "staging",
+		ResourceGroup: "apps", ResourceVersion: "v1",
+		ResourceKind: "Deployment", ResourcePlural: "deployments",
+		Count: 3, StartTime: now.Add(-100 * time.Second), Delta: time.Second,
+	})
+
+	// User can see deployments in prod but NOT staging.
+	auth := selectiveAuthorizer{Allowed: []sqlpkg.ResourceTarget{
+		{Group: "apps", Resource: "deployments", Namespace: "prod"},
+	}}
+	handler := ResourcesHandler(db, testLogger(), auth)
+
+	// namespace=* so discovery finds both namespaces, but RBAC filters staging out.
+	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
+		"namespace": "*",
+	})
+	items := extractItems(t, resp)
+	if len(items) != 5 {
+		t.Fatalf("expected 5 items (prod only), got %d", len(items))
+	}
+	for _, item := range items {
+		m := item.(map[string]any)
+		if m["namespace"] != "prod" {
+			t.Fatalf("expected all items in prod namespace, got %v", m["namespace"])
+		}
+	}
+}
+
+// TestRBAC_PartialResourceTypeAccess seeds two resource types (deployments + panels),
+// grants RBAC access to only one type, and verifies filtering.
+func TestRBAC_PartialResourceTypeAccess(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	// Use different clusters to avoid global_uid collision between resource types.
+	seedResources(t, db, seedOptions{
+		Cluster: "rbac-deploy", Namespace: "prod",
+		ResourceGroup: "apps", ResourceVersion: "v1",
+		ResourceKind: "Deployment", ResourcePlural: "deployments",
+		Count: 4, StartTime: now, Delta: time.Second,
+	})
+	seedResources(t, db, seedOptions{
+		Cluster: "rbac-panel", Namespace: "prod",
+		ResourceGroup: "widgets.templates.krateo.io", ResourceVersion: "v1beta1",
+		ResourceKind: "Panel", ResourcePlural: "panels",
+		Count: 3, StartTime: now.Add(-200 * time.Second), Delta: time.Second,
+	})
+
+	// User can see panels but NOT deployments in prod.
+	auth := selectiveAuthorizer{Allowed: []sqlpkg.ResourceTarget{
+		{Group: "widgets.templates.krateo.io", Resource: "panels", Namespace: "prod"},
+	}}
+
+	// Query with group that spans both — but since discovery is per-group, query panels only.
+	handler := ResourcesHandler(db, testLogger(), auth)
+	resp := callResourcesGET(t, handler, "widgets.templates.krateo.io", "v1beta1", "panels", map[string]string{
+		"namespace": "prod",
+	})
+	items := extractItems(t, resp)
+	if len(items) != 3 {
+		t.Fatalf("expected 3 panels, got %d", len(items))
+	}
+
+	// Deployments should be denied (403) since no RBAC access.
+	handlerDeploy := ResourcesHandler(db, testLogger(), auth)
+	req := httptest.NewRequest("GET", deploymentQuery(map[string]string{"namespace": "prod"}), nil)
+	rec := httptest.NewRecorder()
+	handlerDeploy.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for deployments, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRBAC_PartialAccess_WithPagination verifies that partial RBAC works
+// correctly across multiple pages. The cursor must remain stable and only
+// return resources from allowed targets.
+func TestRBAC_PartialAccess_WithPagination(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	// Seed 10 in prod (allowed) and 10 in staging (denied).
+	// Use different clusters to avoid global_uid collision.
+	seedResources(t, db, seedOptions{
+		Cluster: "rbac-pg-prod", Namespace: "prod",
+		ResourceGroup: "apps", ResourceVersion: "v1",
+		ResourceKind: "Deployment", ResourcePlural: "deployments",
+		Count: 10, StartTime: now, Delta: time.Second,
+	})
+	seedResources(t, db, seedOptions{
+		Cluster: "rbac-pg-stg", Namespace: "staging",
+		ResourceGroup: "apps", ResourceVersion: "v1",
+		ResourceKind: "Deployment", ResourcePlural: "deployments",
+		Count: 10, StartTime: now.Add(-100 * time.Second), Delta: time.Second,
+	})
+
+	auth := selectiveAuthorizer{Allowed: []sqlpkg.ResourceTarget{
+		{Group: "apps", Resource: "deployments", Namespace: "prod"},
+	}}
+	handler := ResourcesHandler(db, testLogger(), auth)
+
+	// Paginate with limit=3, should collect exactly 10 items (prod only).
+	var (
+		cursor string
+		total  int
+	)
+	for page := 0; page < 20; page++ { // safety cap
+		extra := map[string]string{
+			"limit":     "3",
+			"namespace": "*",
+		}
+		if cursor != "" {
+			extra["cursor"] = cursor
+		}
+		resp := callResourcesGET(t, handler, "apps", "v1", "deployments", extra)
+		items := extractItems(t, resp)
+		total += len(items)
+
+		// Verify all items are from prod.
+		for _, item := range items {
+			m := item.(map[string]any)
+			if m["namespace"] != "prod" {
+				t.Fatalf("page %d: expected prod namespace, got %v", page, m["namespace"])
+			}
+		}
+
+		cursorVal, _ := resp["cursor"].(string)
+		if len(items) == 0 || cursorVal == "" {
+			break
+		}
+		cursor = cursorVal
+	}
+	if total != 10 {
+		t.Fatalf("expected 10 total items across pages, got %d", total)
+	}
+}
+
+// TestRBAC_AllDenied_MultiNamespace verifies that 403 is returned when
+// the user has no access to ANY of the discovered namespaces.
+func TestRBAC_AllDenied_MultiNamespace(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	// Use different clusters to avoid global_uid collision.
+	seedResources(t, db, seedOptions{
+		Cluster: "rbac-dn-prod", Namespace: "prod",
+		ResourceGroup: "apps", ResourceVersion: "v1",
+		ResourceKind: "Deployment", ResourcePlural: "deployments",
+		Count: 3, StartTime: now, Delta: time.Second,
+	})
+	seedResources(t, db, seedOptions{
+		Cluster: "rbac-dn-stg", Namespace: "staging",
+		ResourceGroup: "apps", ResourceVersion: "v1",
+		ResourceKind: "Deployment", ResourcePlural: "deployments",
+		Count: 2, StartTime: now.Add(-100 * time.Second), Delta: time.Second,
+	})
+
+	// User has access to "sandbox" only — but no resources exist there.
+	auth := selectiveAuthorizer{Allowed: []sqlpkg.ResourceTarget{
+		{Group: "apps", Resource: "deployments", Namespace: "sandbox"},
+	}}
+	handler := ResourcesHandler(db, testLogger(), auth)
+
+	req := httptest.NewRequest("GET", deploymentQuery(map[string]string{"namespace": "*"}), nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 when no discovered namespace is allowed, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRBAC_Detail_PartialAccess verifies the detail endpoint returns 403
+// when the user has access to a different namespace than the fetched resource.
+func TestRBAC_Detail_PartialAccess(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedResources(t, db, seedOptions{
+		Cluster: "cluster-a", Namespace: "prod",
+		ResourceGroup: "apps", ResourceVersion: "v1",
+		ResourceKind: "Deployment", ResourcePlural: "deployments",
+		Count: 1, StartTime: now, Delta: time.Second,
+	})
+
+	// User can see deployments in staging but NOT prod.
+	auth := selectiveAuthorizer{Allowed: []sqlpkg.ResourceTarget{
+		{Group: "apps", Resource: "deployments", Namespace: "staging"},
+	}}
+	handler := ResourceDetailHandler(db, testLogger(), auth)
+
+	// The resource is in prod, user only has staging access → 403.
+	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-0000", nil)
+	req.SetPathValue("global_uid", "cluster-a:uid-0000")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for detail with wrong namespace access, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRBAC_Detail_AllowedNamespace verifies the detail endpoint returns 200
+// when the user has access to the resource's namespace.
+func TestRBAC_Detail_AllowedNamespace(t *testing.T) {
+	db, cleanup := setupTestPostgres(t)
+	defer cleanup()
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedResources(t, db, seedOptions{
+		Cluster: "cluster-a", Namespace: "prod",
+		ResourceGroup: "apps", ResourceVersion: "v1",
+		ResourceKind: "Deployment", ResourcePlural: "deployments",
+		Count: 1, StartTime: now, Delta: time.Second,
+	})
+
+	// User has access to deployments in prod — matches the resource.
+	auth := selectiveAuthorizer{Allowed: []sqlpkg.ResourceTarget{
+		{Group: "apps", Resource: "deployments", Namespace: "prod"},
+	}}
+	handler := ResourceDetailHandler(db, testLogger(), auth)
+
+	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-0000", nil)
+	req.SetPathValue("global_uid", "cluster-a:uid-0000")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for detail with correct namespace access, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	count, _ := resp["count"].(float64)
+	if count != 1 {
+		t.Fatalf("expected count=1, got %v", count)
+	}
+}
+
 // --- Integration tests: ResourceDetailHandler (GET /resources/{global_uid}) ---
 
 func TestResourceDetail_Found(t *testing.T) {
@@ -1441,7 +1742,7 @@ func TestResourcesList_GlobalUIDInResponse(t *testing.T) {
 
 // --- Helpers ---
 
-func setupTestPostgres(t *testing.T) (*pgxpool.Pool, func()) {
+func setupTestPostgres(t testing.TB) (*pgxpool.Pool, func()) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -1483,7 +1784,7 @@ func setupTestPostgres(t *testing.T) (*pgxpool.Pool, func()) {
 	return db, cleanup
 }
 
-func applySchema(t *testing.T, db *pgxpool.Pool) {
+func applySchema(t testing.TB, db *pgxpool.Pool) {
 	t.Helper()
 
 	schema := `
@@ -1553,7 +1854,7 @@ type seedOptions struct {
 	Delta           time.Duration
 }
 
-func seedResources(t *testing.T, db *pgxpool.Pool, opt seedOptions) {
+func seedResources(t testing.TB, db *pgxpool.Pool, opt seedOptions) {
 	t.Helper()
 
 	for i := 0; i < opt.Count; i++ {

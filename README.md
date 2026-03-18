@@ -1,4 +1,4 @@
-# resources-presenter
+# `resources-presenter`
 
 Read-only HTTP API for querying current Kubernetes resource state stored in PostgreSQL.
 

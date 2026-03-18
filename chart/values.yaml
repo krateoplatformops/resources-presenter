@@ -77,6 +77,7 @@ livenessProbe:
     port: http
   initialDelaySeconds: 45
   periodSeconds: 90
+  timeoutSeconds: 5
 
 readinessProbe:
   httpGet:
@@ -84,6 +85,7 @@ readinessProbe:
     port: http
   initialDelaySeconds: 45
   periodSeconds: 90
+  timeoutSeconds: 5
 
 autoscaling:
   enabled: false
