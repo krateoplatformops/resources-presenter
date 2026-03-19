@@ -1,4 +1,4 @@
-# resources-presenter
+# `resources-presenter`
 
 Read-only HTTP API for querying current Kubernetes resource state stored in PostgreSQL.
 
@@ -9,6 +9,7 @@ Read-only HTTP API for querying current Kubernetes resource state stored in Post
 Key features:
 
 - **GET and POST** query support with filter capabilities
+- **Single-resource detail** endpoint via `global_uid`
 - **Keyset pagination** (`updated_at DESC, id DESC`) for stable, efficient paging
 - **Dynamic resource resolution** via `group` (required) plus optional `version` and `resource` filters — discovery-based, no static registry needed
 - **JSONB label filtering** via PostgreSQL containment (`@>`)
@@ -17,18 +18,23 @@ Key features:
 
 ## API
 
-### Endpoint
+### Endpoints
 
-```
-GET  /resources?group=<group>[&version=<version>][&resource=<resource>][&namespace=<namespace>]
-POST /resources
-```
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/resources` | List resources matching filters (query parameters) |
+| `POST` | `/resources` | List resources matching filters (JSON body) |
+| `GET` | `/resources/{global_uid}` | Get a single resource by `global_uid` |
 
-The resource type is identified by the **required** `group` parameter. `version` and `resource` are optional filters that narrow the discovery query. These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural` in the `krateo_resources` table of the PostgreSQL database.
+---
 
-### Filters
+### List Endpoint — `GET /resources` and `POST /resources`
 
-All filters are optional and combined with `AND`.
+Returns resources matching the provided filters. The resource type is identified by the **required** `group` parameter. `version` and `resource` are optional filters that narrow the discovery query. These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural` in the `krateo_resources` table.
+
+#### Filters (list only)
+
+All filters are optional (except `group`) and combined with `AND`.
 
 | Parameter | Type | Behavior |
 | --- | --- | --- |
@@ -48,15 +54,16 @@ All filters are optional and combined with `AND`.
 
 GET uses query parameters. POST uses the same fields as a JSON body (with `labels` as a JSON object, not a string). Note: `kind` is not a query parameter — the `resource` (plural) field is used for filtering. Only `group` is required; all other fields are optional.
 
-### Response
+#### List response
 
 ```json
 {
-  "count": 1,
+  "count": 2,
   "items": [
     {
       "name": "my-panel",
       "uid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "global_uid": "prod-eu:a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       "namespace": "krateo-system",
       "group": "widgets.templates.krateo.io",
       "version": "v1beta1",
@@ -65,17 +72,31 @@ GET uses query parameters. POST uses the same fields as a JSON body (with `label
       "cluster_name": "prod-eu",
       "created_at": "2026-03-01T10:00:00Z",
       "updated_at": "2026-03-06T14:30:00Z"
+    },
+    {
+      "name": "my-panel-2",
+      "uid": "b2c3d4e5-f6a7-8901-bcde-f2345678901a",
+      "global_uid": "prod-eu:b2c3d4e5-f6a7-8901-bcde-f2345678901a",
+      "namespace": "krateo-system",
+      "group": "widgets.templates.krateo.io",
+      "version": "v1beta1",
+      "kind": "Panel",
+      "resource": "panels",
+      "cluster_name": "prod-eu",
+      "created_at": "2026-03-02T11:00:00Z",
+      "updated_at": "2026-03-07T15:30:00Z"
     }
   ],
   "cursor": "<base64-opaque-token>"
 }
 ```
 
+- `global_uid` is always present: composite key in `cluster_name:uid` format, uniquely identifies a resource across clusters
 - `composition_id` appears only when set (non-null)
 - `raw` appears only when `raw=true` is requested
 - `cursor` is absent on the last page or when results fit in a single page
 
-### Namespace Handling
+#### Namespace Handling
 
 The `namespace` parameter follows Kubernetes API semantics:
 
@@ -87,16 +108,68 @@ The `namespace` parameter follows Kubernetes API semantics:
 
 This mirrors how `kubectl` works: commands target the `default` namespace unless `-n` or `--all-namespaces` is specified.
 
+---
+
+### Detail Endpoint — `GET /resources/{global_uid}`
+
+Fetches a single resource by its `global_uid` (format: `cluster_name:uid`, e.g. `prod-eu:a1b2c3d4-e5f6-7890-abcd-ef1234567890`).
+
+The `global_uid` is returned in every list response item, so clients can use it directly to fetch the full resource detail.
+
+This endpoint does **not** support any of the list filters (`group`, `version`, `resource`, `cluster`, `namespace`, `name`, `name_contains`, `labels`, `since`, `limit`, `cursor`). It takes only the `global_uid` path parameter and an optional `raw` query parameter.
+
+#### Query parameters
+
+| Parameter | Type | Default | Behavior |
+| --- | --- | --- | --- |
+| `raw` | boolean | `true` | Include the full Kubernetes object. Set `?raw=false` to exclude. |
+
+Note: `raw` defaults to `true` on the detail endpoint (opposite of the list endpoint where it defaults to `false`).
+
+#### Detail response
+
+Same structure as the list endpoint, with `count: 1` and a single item in the `items` array:
+
+```json
+{
+  "count": 1,
+  "items": [
+    {
+      "name": "my-panel",
+      "uid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "global_uid": "prod-eu:a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "namespace": "krateo-system",
+      "group": "widgets.templates.krateo.io",
+      "version": "v1beta1",
+      "kind": "Panel",
+      "resource": "panels",
+      "cluster_name": "prod-eu",
+      "created_at": "2026-03-01T10:00:00Z",
+      "updated_at": "2026-03-06T14:30:00Z",
+      "raw": { "..." }
+    }
+  ]
+}
+```
+
+No `cursor` field: there is no pagination on the detail endpoint.
+
+---
+
 ### Error Responses
 
 Kubernetes-style `Status` objects:
 
-| Code | Condition |
-| --- | --- |
-| `400` | Invalid/missing parameters (missing group, bad UUID, JSON, timestamp, cursor) |
-| `403` | Forbidden — RBAC denied access to all discovered resources |
-| `405` | Method not allowed |
-| `500` | Internal server error |
+| Code | Endpoint | Condition |
+| --- | --- | --- |
+| `400` | List | Invalid/missing parameters (missing group, bad UUID, JSON, timestamp, cursor) |
+| `400` | Detail | Missing `global_uid` path parameter |
+| `403` | List | Forbidden: RBAC denied access to all discovered resources |
+| `403` | Detail | Forbidden: RBAC denied access to the requested resource |
+| `404` | Detail | Resource not found — no active resource matches the given `global_uid` |
+| `405` | List | Method not allowed (only GET and POST) |
+| `405` | Detail | Method not allowed (only GET) |
+| `500` | Both | Internal server error |
 
 See [SEARCH.md](SEARCH.md) for full examples including pagination loops.
 
@@ -131,7 +204,9 @@ See [TESTING.md](TESTING.md) for detailed testing instructions.
 
 ## Notes on RBAC
 
-TODO
+RBAC is enforced at resource level and not on the single object.
+For instance, if a user has access to `widgets.templates.krateo.io/panels` then they can see all the panels, but if they don't have access to `widgets.templates.krateo.io/panels` then they can't see any panel, even if they have access to a specific panel object.
+This practically means that RBAC is enforced on the resource type (group/version/resource) and not on the single object and so for a user to have access to a specific object they need to have access to the whole resource type.
 
 ## Health Probes
 

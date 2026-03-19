@@ -31,6 +31,9 @@ CREATE TABLE IF NOT EXISTS krateo_resources (
     -- Full Kubernetes object
     raw               JSONB NOT NULL,
 
+    -- Raw Kubernetes status subtree, denormalized for faster frontend access
+    status_raw        JSONB NULL,
+
     PRIMARY KEY (id)
 );
 

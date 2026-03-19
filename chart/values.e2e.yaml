@@ -25,8 +25,6 @@ config:
   DB_NAME: "krateo" # must match the database created in deploy/test-postgres.yaml
   DB_USER: "krateo" # must match the user created in deploy/test-postgres.yaml
   DB_PASS: "krateo" # must match the password set in deploy/test-postgres.yaml
-  DB_PARAMS: "sslmode=disable&connect_timeout=5"
-  DB_READY_TIMEOUT: "2m"
 
   # Authentication
   JWT_SIGN_KEY: "e2e-test-sign-key"

@@ -13,7 +13,7 @@ import (
 
 // baseCols returns the column names expected for raw=false queries.
 func baseCols() []string {
-	return []string{"resource_name", "uid", "namespace", "resource_group", "resource_version", "resource_kind", "resource_plural", "cluster_name", "created_at", "updated_at", "composition_id", "id"}
+	return []string{"resource_name", "uid", "global_uid", "namespace", "resource_group", "resource_version", "resource_kind", "resource_plural", "cluster_name", "created_at", "updated_at", "composition_id", "id"}
 }
 
 // rawCols returns the column names expected for raw=true queries.
@@ -56,12 +56,12 @@ func deploymentParams(ns string, limit int) ListParams {
 
 // panelRow builds an AddRow call for a Panel resource.
 func panelRow(name, ns, cluster string, created, updated time.Time, compID *string, id int64) []any {
-	return []any{name, "uid-" + name, ns, "widgets.templates.krateo.io", "v1beta1", "Panel", "panels", cluster, created, updated, compID, id}
+	return []any{name, "uid-" + name, cluster + ":uid-" + name, ns, "widgets.templates.krateo.io", "v1beta1", "Panel", "panels", cluster, created, updated, compID, id}
 }
 
 // deploymentRow builds an AddRow call for a Deployment resource.
 func deploymentRow(name, ns, cluster string, created, updated time.Time, compID *string, id int64) []any {
-	return []any{name, "uid-" + name, ns, "apps", "v1", "Deployment", "deployments", cluster, created, updated, compID, id}
+	return []any{name, "uid-" + name, cluster + ":uid-" + name, ns, "apps", "v1", "Deployment", "deployments", cluster, created, updated, compID, id}
 }
 
 // panelArgs builds expected query args: group, version, resource (from IN), namespace (from IN), then extra.
@@ -1190,6 +1190,139 @@ func TestListResources_UnlimitedLimit(t *testing.T) {
 }
 
 // --- UID field test ---
+
+// --- GetByGlobalUID tests ---
+
+func TestGetByGlobalUID_Found(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+
+	rows := pgxmock.NewRows(rawCols()).
+		AddRows(append(deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5)), []byte(`{"kind":"Deployment"}`)))
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
+		WithArgs("cluster-a:uid-nginx").
+		WillReturnRows(rows)
+
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count=1, got %d", result.Count)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(result.Items))
+	}
+
+	item := result.Items[0]
+	if item.GlobalUID != "cluster-a:uid-nginx" {
+		t.Errorf("expected global_uid=cluster-a:uid-nginx, got %q", item.GlobalUID)
+	}
+	if item.Name != "nginx" {
+		t.Errorf("expected name=nginx, got %q", item.Name)
+	}
+	if item.Raw == nil {
+		t.Error("expected raw to be populated when includeRaw=true")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetByGlobalUID_NotFound(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
+		WithArgs("cluster-x:uid-missing").
+		WillReturnRows(pgxmock.NewRows(rawCols()))
+
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-x:uid-missing", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Count != 0 {
+		t.Fatalf("expected count=0, got %d", result.Count)
+	}
+	if len(result.Items) != 0 {
+		t.Fatalf("expected 0 items, got %d", len(result.Items))
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetByGlobalUID_WithoutRaw(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+
+	rows := pgxmock.NewRows(baseCols()).
+		AddRows(deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5)))
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
+		WithArgs("cluster-a:uid-nginx").
+		WillReturnRows(rows)
+
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count=1, got %d", result.Count)
+	}
+	if result.Items[0].Raw != nil {
+		t.Error("expected raw to be nil when includeRaw=false")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetByGlobalUID_QueryError(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
+		WithArgs("cluster-a:uid-fail").
+		WillReturnError(fmt.Errorf("connection refused"))
+
+	_, err = GetByGlobalUID(context.Background(), mock, "cluster-a:uid-fail", true)
+	if err == nil {
+		t.Fatal("expected error for query failure")
+	}
+	if !strings.Contains(err.Error(), "get_by_global_uid") {
+		t.Errorf("expected error to mention 'get_by_global_uid', got: %v", err)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestListResources_UidField(t *testing.T) {
 	mock, err := pgxmock.NewPool()

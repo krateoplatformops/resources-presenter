@@ -1,20 +1,42 @@
 # `/resources` Search Guide
 
-This document explains how to query `/resources` in resources-presenter.
+This document provides full examples for querying the resources-presenter API.
 
-Supported methods:
+## Endpoints Overview
 
-- `GET /resources` with query parameters
-- `POST /resources` with a JSON body
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/resources` | List resources matching filters (query parameters) |
+| `POST` | `/resources` | List resources matching filters (JSON body) |
+| `GET` | `/resources/{global_uid}` | Get a single resource by `global_uid` |
 
-## What `/resources` Returns
+---
 
-Each item in the response represents the current state of a Kubernetes resource (one row per `global_uid`).
+## Resource Item Fields
 
-Each item includes: `name`, `uid`, `namespace`, `group`, `version`, `kind`, `resource`, `cluster_name`, `created_at`, `updated_at`, and `composition_id` (when set).
-Use `raw=true` to also include the full Kubernetes object under the `raw` field.
+Both endpoints return items with the same fields:
 
-## Resource Resolution
+| Field | Type | Present | Description |
+| --- | --- | --- | --- |
+| `name` | string | Always | Resource name |
+| `uid` | string | Always | Kubernetes UID |
+| `global_uid` | string | Always | Composite key (`cluster_name:uid`) — uniquely identifies a resource across clusters |
+| `namespace` | string | Always | Kubernetes namespace |
+| `group` | string | Always | API group (e.g. `apps`) |
+| `version` | string | Always | API version (e.g. `v1`) |
+| `kind` | string | Always | Resource kind (e.g. `Deployment`) |
+| `resource` | string | Always | Resource plural name (e.g. `deployments`) |
+| `cluster_name` | string | Always | Cluster where the resource lives |
+| `created_at` | RFC3339 | Always | When the resource was first ingested |
+| `updated_at` | RFC3339 | Always | When the resource was last updated |
+| `composition_id` | UUID | When set | Krateo composition UUID (omitted when null) |
+| `raw` | object | Conditional | Full Kubernetes object. **List:** only when `raw=true`. **Detail:** included by default, use `?raw=false` to exclude. |
+
+---
+
+## List Endpoint — `GET /resources` and `POST /resources`
+
+### Resource Resolution
 
 The resource type is identified by the **required** `group` parameter, plus optional narrowing filters:
 
@@ -23,13 +45,12 @@ The resource type is identified by the **required** `group` parameter, plus opti
 | `group` | `apps`, `widgets.templates.krateo.io` | **Yes** | Kubernetes API group |
 | `version` | `v1`, `v1beta1` | No | API version (narrows discovery) |
 | `resource` | `deployments`, `panels` | No | Resource plural name (lowercase, narrows discovery) |
-| `namespace` | `default`, `prod` | No | Kubernetes namespace (exact match) |
 
 These map directly to the DB columns `resource_group`, `resource_version`, and `resource_plural`.
 
 When `version` or `resource` are omitted, the handler discovers all matching resources within the group and RBAC-filters them before querying. Missing `group` returns `400`.
 
-## Query Parameters
+### Query Parameters (list only)
 
 All filters (except `group`) are optional and are combined with `AND`.
 
@@ -52,7 +73,7 @@ All filters (except `group`) are optional and are combined with `AND`.
 If `since` is not valid RFC3339, `labels` is not valid JSON, or `composition_id` is not a valid UUID, the API returns `400`.
 If `cursor` is invalid base64/JSON, the API returns `400`.
 
-## POST JSON Body
+### POST JSON Body (list only)
 
 For `POST /resources`, use the same fields in JSON format.
 
@@ -85,9 +106,51 @@ Notes:
 - `limit` defaults to `100` when omitted or `<= 0`.
 - `raw` defaults to `false` when omitted.
 
-## Search Examples
+### List Response
 
-### 1) GET: no filters (first page)
+```json
+{
+  "count": 2,
+  "items": [
+    {
+      "name": "my-api-service",
+      "uid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "global_uid": "cluster-a:a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "namespace": "prod",
+      "group": "apps",
+      "version": "v1",
+      "kind": "Deployment",
+      "resource": "deployments",
+      "cluster_name": "cluster-a",
+      "created_at": "2026-03-01T10:00:00Z",
+      "updated_at": "2026-03-06T14:30:00Z"
+    },
+    {
+      "name": "api-gateway",
+      "uid": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      "global_uid": "cluster-a:b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      "namespace": "prod",
+      "group": "apps",
+      "version": "v1",
+      "kind": "Deployment",
+      "resource": "deployments",
+      "cluster_name": "cluster-a",
+      "created_at": "2026-02-15T08:00:00Z",
+      "updated_at": "2026-03-06T14:25:00Z",
+      "composition_id": "550e8400-e29b-41d4-a716-446655440000",
+      "raw": { "..." }
+    }
+  ],
+  "cursor": "<base64-opaque-token>"
+}
+```
+
+- `count`: number of items in this page
+- `cursor`: present only if there are more pages; absent or empty on the last page
+
+### List Examples
+
+#### 1) GET: no filters (first page)
 
 ```bash
 curl --get "http://localhost:8080/resources" \
@@ -96,7 +159,7 @@ curl --get "http://localhost:8080/resources" \
   --data-urlencode "resource=panels"
 ```
 
-### 2) GET: filter by cluster + namespace
+#### 2) GET: filter by cluster + namespace
 
 ```bash
 curl --get "http://localhost:8080/resources" \
@@ -107,7 +170,7 @@ curl --get "http://localhost:8080/resources" \
   --data-urlencode "namespace=default"
 ```
 
-### 3) GET: exact match on resource name
+#### 3) GET: exact match on resource name
 
 ```bash
 curl --get "http://localhost:8080/resources" \
@@ -119,7 +182,7 @@ curl --get "http://localhost:8080/resources" \
 
 Returns only the resource with `resource_name = 'my-api-service'` (case-sensitive, exact match).
 
-### 3b) GET: search by resource name (contains, case-insensitive)
+#### 3b) GET: search by resource name (contains, case-insensitive)
 
 ```bash
 curl --get "http://localhost:8080/resources" \
@@ -133,7 +196,7 @@ Matches names like `api`, `API`, `my-api-service`, `api-gateway`.
 
 > `name` and `name_contains` are mutually exclusive: providing both returns `400`.
 
-### 4) GET: filter by labels
+#### 4) GET: filter by labels
 
 ```bash
 curl --get "http://localhost:8080/resources" \
@@ -145,7 +208,7 @@ curl --get "http://localhost:8080/resources" \
 
 `labels` uses JSONB containment (`@>`): all provided key/value pairs must exist in `metadata.labels`.
 
-### 5) GET: filter by time (`since`)
+#### 5) GET: filter by time (`since`)
 
 ```bash
 curl --get "http://localhost:8080/resources" \
@@ -157,7 +220,7 @@ curl --get "http://localhost:8080/resources" \
 
 Returns resources with `updated_at >= since`.
 
-### 6) GET: filter by composition_id
+#### 6) GET: filter by composition_id
 
 ```bash
 curl --get "http://localhost:8080/resources" \
@@ -167,7 +230,7 @@ curl --get "http://localhost:8080/resources" \
   --data-urlencode "composition_id=550e8400-e29b-41d4-a716-446655440000"
 ```
 
-### 7) GET: include full raw object
+#### 7) GET: include full raw object
 
 ```bash
 curl --get "http://localhost:8080/resources" \
@@ -177,7 +240,7 @@ curl --get "http://localhost:8080/resources" \
   --data-urlencode "raw=true"
 ```
 
-### 8) GET: combine all filters
+#### 8) GET: combine all filters
 
 ```bash
 curl --get "http://localhost:8080/resources" \
@@ -193,7 +256,7 @@ curl --get "http://localhost:8080/resources" \
   --data-urlencode "limit=100"
 ```
 
-### 9) POST: same query as JSON body
+#### 9) POST: same query as JSON body
 
 ```bash
 curl --request POST "http://localhost:8080/resources" \
@@ -212,7 +275,7 @@ curl --request POST "http://localhost:8080/resources" \
   }'
 ```
 
-## Pagination with `cursor`
+### Pagination (list only)
 
 Uses keyset pagination with fixed order: `updated_at DESC, id DESC`.
 
@@ -224,7 +287,9 @@ The cursor is built from the last returned row (`updated_at`, `id`) and is opaqu
 
 When there are no more pages, the `cursor` field is absent in the response.
 
-### GET pagination
+Pagination is **not available** on the detail endpoint — it always returns exactly 0 or 1 items.
+
+#### GET pagination
 
 ```bash
 # page 1
@@ -245,7 +310,7 @@ curl --get "http://localhost:8080/resources" \
   --data-urlencode "cursor=<CURSOR_PAGE_1>"
 ```
 
-### POST pagination
+#### POST pagination
 
 ```bash
 # page 1
@@ -272,7 +337,7 @@ curl --request POST "http://localhost:8080/resources" \
   }'
 ```
 
-### Automatic pagination loop (Bash + jq)
+#### Automatic pagination loop (Bash + jq)
 
 ```bash
 BASE_URL="http://localhost:8080/resources"
@@ -307,70 +372,98 @@ done
 
 If you change filters between pages, pagination continuity is broken.
 
-## Response Format
-
-```json
-{
-  "count": 2,
-  "items": [
-    {
-      "name": "my-api-service",
-      "uid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-      "namespace": "prod",
-      "group": "apps",
-      "version": "v1",
-      "kind": "Deployment",
-      "resource": "deployments",
-      "cluster_name": "cluster-a",
-      "created_at": "2026-03-01T10:00:00Z",
-      "updated_at": "2026-03-06T14:30:00Z"
-    },
-    {
-      "name": "api-gateway",
-      "uid": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-      "namespace": "prod",
-      "group": "apps",
-      "version": "v1",
-      "kind": "Deployment",
-      "resource": "deployments",
-      "cluster_name": "cluster-a",
-      "created_at": "2026-02-15T08:00:00Z",
-      "updated_at": "2026-03-06T14:25:00Z",
-      "composition_id": "550e8400-e29b-41d4-a716-446655440000",
-      "raw": { "..." }
-    }
-  ],
-  "cursor": "<base64-opaque-token>"
-}
-```
-
-- `count`: number of items in this page
-- `items`: array of resources with the following fields:
-  - `name`: resource name
-  - `namespace`: Kubernetes namespace
-  - `group`: API group (e.g. `apps`)
-  - `version`: API version (e.g. `v1`)
-  - `kind`: resource kind (e.g. `Deployment`)
-  - `resource`: resource plural name (e.g. `deployments`) — useful for constructing API server URLs
-  - `cluster_name`: cluster where the resource lives
-  - `created_at`: when the resource was first ingested (RFC3339)
-  - `updated_at`: when the resource was last updated (RFC3339)
-  - `composition_id`: Krateo composition UUID (omitted when null)
-  - `uid`: Kubernetes UID of the resource
-  - `raw`: full Kubernetes object (only when `raw=true`)
-- `cursor`: present only if there are more pages; absent or empty on the last page
-
-## Sorting
+### Sorting (list only)
 
 Fixed order: `updated_at DESC, id DESC`. Currently not user-configurable.
 
-## Error Responses
+---
+
+## Detail Endpoint — `GET /resources/{global_uid}`
+
+Fetches a single resource by its `global_uid`. This endpoint does **not** accept any of the list filters (`group`, `version`, `resource`, `cluster`, `namespace`, `name`, `name_contains`, `labels`, `since`, `limit`, `cursor`).
+
+### Path parameter
+
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `global_uid` | string | **Required.** Composite key in `cluster_name:uid` format (e.g. `prod-eu:a1b2c3d4-e5f6-7890-abcd-ef1234567890`). Returned in every list response item. |
+
+### Query parameters (detail only)
+
+| Parameter | Type | Default | Behavior |
+| --- | --- | --- | --- |
+| `raw` | boolean | `true` | Include the full Kubernetes object. Set `?raw=false` to exclude. |
+
+Note: `raw` defaults to `true` here (opposite of the list endpoint where it defaults to `false`).
+
+### Detail Response
+
+```json
+{
+  "count": 1,
+  "items": [
+    {
+      "name": "my-panel",
+      "uid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "global_uid": "prod-eu:a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "namespace": "krateo-system",
+      "group": "widgets.templates.krateo.io",
+      "version": "v1beta1",
+      "kind": "Panel",
+      "resource": "panels",
+      "cluster_name": "prod-eu",
+      "created_at": "2026-03-01T10:00:00Z",
+      "updated_at": "2026-03-06T14:30:00Z",
+      "raw": { "..." }
+    }
+  ]
+}
+```
+
+- `count` is always `0` or `1`
+- No `cursor` field — there is no pagination on the detail endpoint
+- `raw` is included by default; only absent when `?raw=false` is set
+
+### Detail Examples
+
+```bash
+# Fetch a single resource (raw included by default)
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources/prod-eu:a1b2c3d4-e5f6-7890-abcd-ef1234567890' | jq
+
+# Without raw
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources/prod-eu:a1b2c3d4-e5f6-7890-abcd-ef1234567890?raw=false' | jq
+
+# Typical workflow: list → pick global_uid → fetch detail
+GLOBAL_UID=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=apps&version=v1&resource=deployments&namespace=prod&limit=1' \
+  | jq -r '.items[0].global_uid')
+
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/resources/$GLOBAL_UID" | jq
+```
+
+### Detail Error Responses
+
+| Code | Condition |
+| --- | --- |
+| `400` | Missing `global_uid` path parameter |
+| `403` | Forbidden — RBAC denied access to the requested resource |
+| `404` | Resource not found — no active resource matches the given `global_uid` |
+| `405` | Method not allowed (only GET is supported) |
+| `500` | Internal server error |
+
+---
+
+## Error Responses (all endpoints)
 
 Errors are returned as Kubernetes-style `Status` objects:
 
-| Status Code | Condition |
-| --- | --- |
-| `400` | Invalid or missing parameters (missing group, bad UUID, JSON, timestamp, limit, cursor) |
-| `403` | Forbidden — RBAC denied access to all discovered resources |
-| `405` | Method not allowed (only GET and POST are supported) |
-| `500` | Internal server error (database failure, serialization error) |
+| Status Code | List | Detail | Condition |
+| --- | --- | --- | --- |
+| `400` | Yes | Yes | Invalid or missing parameters |
+| `403` | Yes | Yes | Forbidden — RBAC denied access |
+| `404` | — | Yes | Resource not found |
+| `405` | Yes | Yes | Method not allowed |
+| `500` | Yes | Yes | Internal server error |

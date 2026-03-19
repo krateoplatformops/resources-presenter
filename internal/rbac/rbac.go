@@ -2,7 +2,6 @@ package rbac
 
 import (
 	"context"
-	"log"
 
 	"github.com/krateoplatformops/plumbing/kubeutil/rbac"
 	"github.com/krateoplatformops/resources-presenter/internal/sql"
@@ -26,7 +25,20 @@ func (RbacAuthorizer) FilterAllowed(ctx context.Context, targets []sql.ResourceT
 		return nil
 	}
 
-	// verb=get, no version needed by Kubernetes RBAC
+	ucts := buildUserCanTargets(targets)
+
+	// Batch RBAC check: groups by namespace, uses SelfSubjectRulesReview
+	// with fallback to per-target SelfSubjectAccessReview.
+	decisions := rbac.UserCan(ctx, ucts)
+
+	return filterByDecisions(targets, ucts, decisions)
+}
+
+// buildUserCanTargets converts resource targets to the plumbing RBAC format.
+// Verb is always "get". Version is intentionally excluded: Kubernetes RBAC
+// operates at the Group+Resource level, not Group+Version+Resource.
+// Object-level permissions are currently not supported, so Name is also not involved.
+func buildUserCanTargets(targets []sql.ResourceTarget) []rbac.UserCanTarget {
 	ucts := make([]rbac.UserCanTarget, len(targets))
 	for i, t := range targets {
 		ucts[i] = rbac.UserCanTarget{
@@ -35,27 +47,17 @@ func (RbacAuthorizer) FilterAllowed(ctx context.Context, targets []sql.ResourceT
 			Namespace:     t.Namespace,
 		}
 	}
+	return ucts
+}
 
-	// Batch RBAC check: groups by namespace, uses SelfSubjectRulesReview
-	// with fallback to per-target SelfSubjectAccessReview.
-	decisions := rbac.UserCan(ctx, ucts)
-
+// filterByDecisions returns only the targets whose corresponding UserCanTarget
+// was allowed by the RBAC decisions map.
+func filterByDecisions(targets []sql.ResourceTarget, ucts []rbac.UserCanTarget, decisions map[rbac.UserCanTarget]bool) []sql.ResourceTarget {
 	var allowed []sql.ResourceTarget
 	for i, t := range targets {
 		if decisions[ucts[i]] {
-			log.Printf("RBAC ALLOWED: (group=%s resource=%s namespace=%s)\n", t.Group, t.Resource, t.Namespace)
 			allowed = append(allowed, t)
-		} else {
-			log.Printf("RBAC DENIED: (group=%s resource=%s namespace=%s)\n", t.Group, t.Resource, t.Namespace)
 		}
 	}
-
-	// log allowed targets just for testing
-	log.Print("==========BEGIN ALLOWED LIST ===========\n")
-	for _, t := range allowed {
-		log.Printf("FINAL FILTERED ALLOWED: (group=%s resource=%s namespace=%s)\n", t.Group, t.Resource, t.Namespace)
-	}
-	log.Print("==========END ALLOWED LIST ===========\n")
-
 	return allowed
 }

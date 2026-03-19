@@ -40,7 +40,13 @@ func main() {
 
 	// HTTP server
 	mux := http.NewServeMux()
-	probes.Register(mux, cfg.Log, pool, time.Second)
+
+	// probePingTimeout is how long the readiness/liveness probe handler waits
+	// for pool.Ping to respond. Must be lower than the Kubernetes
+	// timeoutSeconds (chart default: 5s) to avoid kubelet killing the request
+	// before the DB check completes.
+	probePingTimeout := 3 * time.Second
+	probes.Register(mux, cfg.Log, pool, probePingTimeout)
 
 	chain := use.NewChain(
 		use.TraceId(),
@@ -68,13 +74,14 @@ func main() {
 
 	auth := rbac.RbacAuthorizer{}
 	mux.Handle("/resources", authChain.Then(handlers.ResourcesHandler(pool, cfg.Log, auth)))
+	mux.Handle("GET /resources/{global_uid}", authChain.Then(handlers.ResourceDetailHandler(pool, cfg.Log, auth)))
 
 	server := &http.Server{
 		Addr:         ":" + strconv.Itoa(cfg.Port),
 		Handler:      mux,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	serverErr := make(chan error, 1)

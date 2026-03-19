@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -20,8 +19,8 @@ type Querier interface {
 // discovered from the database. Used for RBAC target enumeration and for
 // restricting query results to allowed resources.
 type ResourceTarget struct {
-	Group     string // resource_group
-	Resource  string // resource_plural
+	Group     string // resource_group column in krateo_resources table of the database
+	Resource  string // resource_plural column in krateo_resources table of the database
 	Namespace string
 }
 
@@ -51,6 +50,7 @@ type ListParams struct {
 type ResourceItem struct {
 	Name          string          `json:"name"`
 	Uid           string          `json:"uid"`
+	GlobalUID     string          `json:"global_uid"`
 	Namespace     string          `json:"namespace"`
 	Group         string          `json:"group"`
 	Version       string          `json:"version"`
@@ -85,11 +85,10 @@ type rowCursor struct {
 // - ResourceVersion, ResourcePlural, Namespace, Cluster (all optional, to narrow down the result set)
 // Only active rows are considered.
 
-//TODO: discover with just guid (it should return always 1 row)
-
 func DiscoverTargets(ctx context.Context, db Querier, p ListParams) ([]ResourceTarget, error) {
 	b := NewBuilder()
 
+	b.Where("deleted_at IS NULL")
 	b.Where("resource_group = ?", p.ResourceGroup)
 	if p.ResourceVersion != "" {
 		b.Where("resource_version = ?", p.ResourceVersion)
@@ -97,7 +96,6 @@ func DiscoverTargets(ctx context.Context, db Querier, p ListParams) ([]ResourceT
 	if p.ResourcePlural != "" {
 		b.Where("resource_plural = ?", p.ResourcePlural)
 	}
-	b.Where("deleted_at IS NULL")
 	if p.Cluster != "" {
 		b.Where("cluster_name = ?", p.Cluster)
 	}
@@ -155,6 +153,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 		var (
 			resourceName    string
 			uid             string
+			globalUID       string
 			namespace       string
 			resourceGroup   string
 			resourceVersion string
@@ -169,7 +168,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 		)
 
 		scanDest := []any{
-			&resourceName, &uid, &namespace,
+			&resourceName, &uid, &globalUID, &namespace,
 			&resourceGroup, &resourceVersion, &resourceKind, &resourcePlural,
 			&clusterName, &createdAt, &updatedAt, &compositionID,
 			&id,
@@ -185,6 +184,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 		item := ResourceItem{
 			Name:          resourceName,
 			Uid:           uid,
+			GlobalUID:     globalUID,
 			Namespace:     namespace,
 			Group:         resourceGroup,
 			Version:       resourceVersion,
@@ -239,6 +239,9 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 func buildListQuery(p ListParams) (string, []any, error) {
 	b := NewBuilder()
 
+	// Soft-delete filter: only return active rows.
+	b.Where("deleted_at IS NULL")
+
 	// Group is always required.
 	b.Where("resource_group = ?", p.ResourceGroup)
 
@@ -257,14 +260,7 @@ func buildListQuery(p ListParams) (string, []any, error) {
 			args = append(args, t.Resource, t.Namespace)
 		}
 		b.Where(fmt.Sprintf("(resource_plural, namespace) IN (%s)", strings.Join(parts, ", ")), args...)
-	} else {
-		// log a warning just for testing, to be removed
-		log.Println("WARNING: no RBAC targets")
-		log.Println("WARNING: probably we will not arrive here in e2e because the handler should enforce discovery+RBAC before this")
 	}
-
-	// Soft-delete filter: only return active rows.
-	b.Where("deleted_at IS NULL")
 
 	if p.Cluster != "" {
 		b.Where("cluster_name = ?", p.Cluster)
@@ -307,7 +303,7 @@ func buildListQuery(p ListParams) (string, []any, error) {
 	}
 
 	// Columns
-	cols := "resource_name, uid, namespace, resource_group, resource_version, resource_kind, resource_plural, cluster_name, created_at, updated_at, composition_id, id"
+	cols := "resource_name, uid, global_uid, namespace, resource_group, resource_version, resource_kind, resource_plural, cluster_name, created_at, updated_at, composition_id, id"
 	if p.Raw {
 		cols += ", raw"
 	}
@@ -315,6 +311,86 @@ func buildListQuery(p ListParams) (string, []any, error) {
 	baseSQL := fmt.Sprintf("SELECT %s FROM krateo_resources", cols)
 	query, args := b.Render(baseSQL)
 	return query, args, nil
+}
+
+// GetByGlobalUID fetches a single resource by its global_uid.
+// It returns a ListResult with count 0 or 1 for response format consistency.
+// When includeRaw is true (the default for the detail endpoint), the full raw
+// Kubernetes object is included in the response.
+func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRaw bool) (*ListResult, error) {
+	cols := "resource_name, uid, global_uid, namespace, resource_group, resource_version, resource_kind, resource_plural, cluster_name, created_at, updated_at, composition_id, id"
+	if includeRaw {
+		cols += ", raw"
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM krateo_resources WHERE global_uid = $1 AND deleted_at IS NULL", cols)
+
+	rows, err := db.Query(ctx, query, globalUID)
+	if err != nil {
+		return nil, fmt.Errorf("get_by_global_uid query: %w", err)
+	}
+	defer rows.Close()
+
+	result := &ListResult{Items: []ResourceItem{}}
+
+	if rows.Next() {
+		var (
+			resourceName    string
+			uid             string
+			gUID            string
+			namespace       string
+			resourceGroup   string
+			resourceVersion string
+			resourceKind    string
+			resourcePlural  string
+			clusterName     string
+			createdAt       time.Time
+			updatedAt       time.Time
+			compositionID   *string
+			id              int64
+			rawJSON         []byte
+		)
+
+		scanDest := []any{
+			&resourceName, &uid, &gUID, &namespace,
+			&resourceGroup, &resourceVersion, &resourceKind, &resourcePlural,
+			&clusterName, &createdAt, &updatedAt, &compositionID,
+			&id,
+		}
+		if includeRaw {
+			scanDest = append(scanDest, &rawJSON)
+		}
+
+		if err := rows.Scan(scanDest...); err != nil {
+			return nil, fmt.Errorf("get_by_global_uid scan: %w", err)
+		}
+
+		item := ResourceItem{
+			Name:          resourceName,
+			Uid:           uid,
+			GlobalUID:     gUID,
+			Namespace:     namespace,
+			Group:         resourceGroup,
+			Version:       resourceVersion,
+			Kind:          resourceKind,
+			Resource:      resourcePlural,
+			ClusterName:   clusterName,
+			CreatedAt:     createdAt,
+			UpdatedAt:     updatedAt,
+			CompositionID: compositionID,
+		}
+		if includeRaw && rawJSON != nil {
+			item.Raw = json.RawMessage(rawJSON)
+		}
+
+		result.Items = append(result.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("get_by_global_uid rows: %w", err)
+	}
+
+	result.Count = len(result.Items)
+	return result, nil
 }
 
 // escapeLIKE escapes PostgreSQL LIKE/ILIKE special characters (%, _, \).

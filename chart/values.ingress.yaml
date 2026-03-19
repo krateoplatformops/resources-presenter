@@ -5,7 +5,6 @@ config:
   DEBUG: "true"
   DB_HOST: pg-cluster-rw.krateo-system.svc.cluster.local
   DB_NAME: krateo-db
-  DB_PARAMS: "sslmode=disable&connect_timeout=5"
   DB_READY_TIMEOUT: "5m"
 
 ingress:
