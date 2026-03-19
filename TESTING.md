@@ -150,7 +150,7 @@ You should see:
 ```bash
 # The JWT_SIGN_KEY must match the one in values.e2e.yaml
 # NOTE: flags MUST come before the positional argument (username).
-TOKEN=$(krateoctl add-user \
+export TOKEN=$(krateoctl add-user \
   -n krateo-system \
   -k "e2e-test-sign-key" \
   -g devs \

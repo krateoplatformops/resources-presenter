@@ -15,17 +15,17 @@ import (
 // --- Handler-level benchmarks ---
 //
 // These benchmarks test the full handler pipeline (parse → discovery → RBAC → query → serialize)
-// against a real PostgreSQL instance via testcontainers.
+// against a real PostgreSQL instance via testcontainers (shared container from TestMain).
 // They measure end-to-end handler throughput and memory allocation.
 //
 // Run with:
 //   go test ./internal/handlers/ -bench=BenchmarkHandler -benchmem -count=3
 
-// benchSeed creates a test database, applies schema, and seeds resources.
-func benchSeed(b *testing.B, count int) (*pgxpool.Pool, func()) {
+// benchSeed truncates the table and seeds resources for benchmarking.
+func benchSeed(b *testing.B, count int) *pgxpool.Pool {
 	b.Helper()
 
-	db, cleanup := setupTestPostgres(b)
+	db := testDB(b)
 	applySchema(b, db)
 
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
@@ -36,13 +36,12 @@ func benchSeed(b *testing.B, count int) (*pgxpool.Pool, func()) {
 		Count: count, StartTime: now, Delta: time.Second,
 	})
 
-	return db, cleanup
+	return db
 }
 
 // BenchmarkHandler_List_100_NoRaw benchmarks listing 100 resources without raw.
 func BenchmarkHandler_List_100_NoRaw(b *testing.B) {
-	db, cleanup := benchSeed(b, 100)
-	defer cleanup()
+	db := benchSeed(b, 100)
 
 	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
@@ -60,8 +59,7 @@ func BenchmarkHandler_List_100_NoRaw(b *testing.B) {
 
 // BenchmarkHandler_List_100_Raw benchmarks listing 100 resources with raw=true.
 func BenchmarkHandler_List_100_Raw(b *testing.B) {
-	db, cleanup := benchSeed(b, 100)
-	defer cleanup()
+	db := benchSeed(b, 100)
 
 	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
@@ -79,8 +77,7 @@ func BenchmarkHandler_List_100_Raw(b *testing.B) {
 
 // BenchmarkHandler_List_1000_NoRaw benchmarks listing 1000 resources without raw.
 func BenchmarkHandler_List_1000_NoRaw(b *testing.B) {
-	db, cleanup := benchSeed(b, 1000)
-	defer cleanup()
+	db := benchSeed(b, 1000)
 
 	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
@@ -98,8 +95,7 @@ func BenchmarkHandler_List_1000_NoRaw(b *testing.B) {
 
 // BenchmarkHandler_List_1000_Raw benchmarks listing 1000 resources with raw=true.
 func BenchmarkHandler_List_1000_Raw(b *testing.B) {
-	db, cleanup := benchSeed(b, 1000)
-	defer cleanup()
+	db := benchSeed(b, 1000)
 
 	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
@@ -117,8 +113,7 @@ func BenchmarkHandler_List_1000_Raw(b *testing.B) {
 
 // BenchmarkHandler_Detail benchmarks fetching a single resource by global_uid.
 func BenchmarkHandler_Detail(b *testing.B) {
-	db, cleanup := benchSeed(b, 100)
-	defer cleanup()
+	db := benchSeed(b, 100)
 
 	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
 
@@ -137,8 +132,7 @@ func BenchmarkHandler_Detail(b *testing.B) {
 
 // BenchmarkHandler_Gzip_100_Raw benchmarks the gzip middleware with 100 raw resources.
 func BenchmarkHandler_Gzip_100_Raw(b *testing.B) {
-	db, cleanup := benchSeed(b, 100)
-	defer cleanup()
+	db := benchSeed(b, 100)
 
 	inner := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 	handler := Gzip()(inner)
@@ -160,8 +154,7 @@ func BenchmarkHandler_Gzip_100_Raw(b *testing.B) {
 // and verifies the compressed response is valid. Reports uncompressed size,
 // compressed size, and the ratio as custom metrics.
 func BenchmarkHandler_GzipCompressionRatio(b *testing.B) {
-	db, cleanup := benchSeed(b, 100)
-	defer cleanup()
+	db := benchSeed(b, 100)
 
 	inner := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 

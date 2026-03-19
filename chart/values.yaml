@@ -150,8 +150,10 @@ config:
   # Maximum time to wait for PostgreSQL to become ready
   DB_READY_TIMEOUT: "5m"
 
-  # Extra query parameters (e.g. sslmode=disable&connect_timeout=5)
-  DB_PARAMS: "sslmode=disable&connect_timeout=5"
+  # Extra query parameters appended to the PostgreSQL connection string.
+  # pool_min_conns: pre-warm connections at startup to avoid cold-start latency spikes.
+  # pool_max_conns: headroom for burst traffic without exhausting PostgreSQL.
+  DB_PARAMS: "sslmode=disable&connect_timeout=5&pool_min_conns=4&pool_max_conns=10"
 
   # Database username (loaded from secret)
   # This value can be used for development/testing
@@ -178,3 +180,7 @@ config:
   # Kubernetes namespace where {username}-clientconfig Secrets are stored.
   # Used by use.UserConfig middleware to load user credentials for RBAC.
   AUTHN_NS: "krateo-system"
+
+  # RBAC decision cache TTL. Higher values reduce K8s API calls but delay
+  # permission changes from taking effect. Default in plumbing: 10s.
+  RBAC_USERCAN_CACHE_TTL: "120s"

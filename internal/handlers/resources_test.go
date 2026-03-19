@@ -16,9 +16,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	sqlpkg "github.com/krateoplatformops/resources-presenter/internal/sql"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // --- Test authorizers ---
@@ -86,8 +83,7 @@ func panelQuery(extra map[string]string) string {
 // --- Integration test: multi-page pagination ---
 
 func TestResourcesPagination_MultiPage(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -164,8 +160,7 @@ func TestResourcesPagination_MultiPage(t *testing.T) {
 // --- Integration test: namespace and cluster filters ---
 
 func TestResourcesFilter_NamespaceAndCluster(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -240,8 +235,7 @@ func TestResourcesFilter_NamespaceAndCluster(t *testing.T) {
 // --- Integration test: raw=true returns JSONB payload ---
 
 func TestResourcesRawFlag(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -300,8 +294,7 @@ func TestResourcesRawFlag(t *testing.T) {
 // --- Integration test: missing group returns 400 ---
 
 func TestResourcesMissingGroup(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
@@ -318,8 +311,7 @@ func TestResourcesMissingGroup(t *testing.T) {
 // --- Integration test: RBAC denial returns 403 ---
 
 func TestResourcesRBACDenied(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -356,8 +348,7 @@ func TestResourcesRBACDenied(t *testing.T) {
 // --- Integration test: name_contains search (case-insensitive partial match) ---
 
 func TestResourcesFilter_NameContains(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -417,8 +408,7 @@ func TestResourcesFilter_NameContains(t *testing.T) {
 // --- Integration test: name exact match ---
 
 func TestResourcesFilter_NameExact(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -480,8 +470,7 @@ func TestResourcesFilter_NameExact(t *testing.T) {
 // --- Integration test: name and name_contains are mutually exclusive ---
 
 func TestResourcesFilter_NameAndNameContainsMutuallyExclusive(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
@@ -499,8 +488,7 @@ func TestResourcesFilter_NameAndNameContainsMutuallyExclusive(t *testing.T) {
 // --- Integration test: labels filter (JSONB containment) ---
 
 func TestResourcesFilter_Labels(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -558,8 +546,7 @@ func TestResourcesFilter_Labels(t *testing.T) {
 // --- Integration test: since filter ---
 
 func TestResourcesFilter_Since(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -595,8 +582,7 @@ func TestResourcesFilter_Since(t *testing.T) {
 // --- Integration test: POST method support ---
 
 func TestResourcesPOST_BasicQuery(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -673,8 +659,7 @@ func TestResourcesPOST_BasicQuery(t *testing.T) {
 }
 
 func TestResourcesPOST_Pagination(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -729,8 +714,7 @@ func TestResourcesPOST_Pagination(t *testing.T) {
 }
 
 func TestResourcesPOST_ValidationErrors(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
@@ -799,8 +783,7 @@ func TestResourcesPOST_ValidationErrors(t *testing.T) {
 // --- Unit test: method not allowed ---
 
 func TestResourcesMethodNotAllowed(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
 
@@ -1215,8 +1198,7 @@ func TestParseListParamsJSON_UnlimitedLimit(t *testing.T) {
 // --- Integration test: POST RBAC denied returns 403 ---
 
 func TestResourcesPOST_RBACDenied(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -1254,8 +1236,7 @@ func TestResourcesPOST_RBACDenied(t *testing.T) {
 // grants RBAC access to only one, and verifies that only the allowed
 // namespace's resources are returned.
 func TestRBAC_PartialNamespaceAccess(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -1301,8 +1282,7 @@ func TestRBAC_PartialNamespaceAccess(t *testing.T) {
 // TestRBAC_PartialResourceTypeAccess seeds two resource types (deployments + panels),
 // grants RBAC access to only one type, and verifies filtering.
 func TestRBAC_PartialResourceTypeAccess(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -1351,8 +1331,7 @@ func TestRBAC_PartialResourceTypeAccess(t *testing.T) {
 // correctly across multiple pages. The cursor must remain stable and only
 // return resources from allowed targets.
 func TestRBAC_PartialAccess_WithPagination(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -1417,8 +1396,7 @@ func TestRBAC_PartialAccess_WithPagination(t *testing.T) {
 // TestRBAC_AllDenied_MultiNamespace verifies that 403 is returned when
 // the user has no access to ANY of the discovered namespaces.
 func TestRBAC_AllDenied_MultiNamespace(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -1456,8 +1434,7 @@ func TestRBAC_AllDenied_MultiNamespace(t *testing.T) {
 // TestRBAC_Detail_PartialAccess verifies the detail endpoint returns 403
 // when the user has access to a different namespace than the fetched resource.
 func TestRBAC_Detail_PartialAccess(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -1490,8 +1467,7 @@ func TestRBAC_Detail_PartialAccess(t *testing.T) {
 // TestRBAC_Detail_AllowedNamespace verifies the detail endpoint returns 200
 // when the user has access to the resource's namespace.
 func TestRBAC_Detail_AllowedNamespace(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -1532,8 +1508,7 @@ func TestRBAC_Detail_AllowedNamespace(t *testing.T) {
 // --- Integration tests: ResourceDetailHandler (GET /resources/{global_uid}) ---
 
 func TestResourceDetail_Found(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -1590,8 +1565,7 @@ func TestResourceDetail_Found(t *testing.T) {
 }
 
 func TestResourceDetail_RawFalse(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -1633,8 +1607,7 @@ func TestResourceDetail_RawFalse(t *testing.T) {
 }
 
 func TestResourceDetail_NotFound(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -1651,8 +1624,7 @@ func TestResourceDetail_NotFound(t *testing.T) {
 }
 
 func TestResourceDetail_RBACDenied(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -1683,8 +1655,7 @@ func TestResourceDetail_RBACDenied(t *testing.T) {
 }
 
 func TestResourceDetail_MethodNotAllowed(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
 
@@ -1700,8 +1671,7 @@ func TestResourceDetail_MethodNotAllowed(t *testing.T) {
 
 // TestResourcesList_GlobalUIDInResponse verifies that global_uid is returned in the list endpoint response.
 func TestResourcesList_GlobalUIDInResponse(t *testing.T) {
-	db, cleanup := setupTestPostgres(t)
-	defer cleanup()
+	db := testDB(t)
 
 	applySchema(t, db)
 
@@ -1742,47 +1712,6 @@ func TestResourcesList_GlobalUIDInResponse(t *testing.T) {
 
 // --- Helpers ---
 
-func setupTestPostgres(t testing.TB) (*pgxpool.Pool, func()) {
-	t.Helper()
-	ctx := context.Background()
-
-	container, err := postgres.Run(ctx, "postgres:18-alpine",
-		postgres.WithDatabase("testdb"),
-		postgres.WithUsername("test"),
-		postgres.WithPassword("test"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(30*time.Second),
-		),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	connStr, err := container.ConnectionString(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	connStr += "&sslmode=disable"
-
-	db, err := pgxpool.New(ctx, connStr)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := db.Ping(ctx); err != nil {
-		t.Fatal(err)
-	}
-
-	cleanup := func() {
-		db.Close()
-		container.Terminate(ctx)
-	}
-
-	return db, cleanup
-}
 
 func applySchema(t testing.TB, db *pgxpool.Pool) {
 	t.Helper()
