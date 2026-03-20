@@ -21,6 +21,26 @@ func rawCols() []string {
 	return append(baseCols(), "raw")
 }
 
+// statusRawCols returns the column names expected for status_raw=true queries.
+func statusRawCols() []string {
+	return append(baseCols(), "status_raw")
+}
+
+// rawAndStatusRawCols returns the column names expected for raw=true + status_raw=true queries.
+func rawAndStatusRawCols() []string {
+	return append(rawCols(), "status_raw")
+}
+
+// detailCols returns the column names for GetByGlobalUID (raw + status_raw always included).
+func detailCols() []string {
+	return append(rawCols(), "status_raw")
+}
+
+// detailColsNoRaw returns the column names for GetByGlobalUID with includeRaw=false (status_raw still included).
+func detailColsNoRaw() []string {
+	return append(baseCols(), "status_raw")
+}
+
 // discoverCols returns the column names for DiscoverTargets queries.
 func discoverCols() []string {
 	return []string{"resource_group", "resource_plural", "namespace"}
@@ -1203,8 +1223,8 @@ func TestGetByGlobalUID_Found(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	created := now.Add(-24 * time.Hour)
 
-	rows := pgxmock.NewRows(rawCols()).
-		AddRows(append(deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5)), []byte(`{"kind":"Deployment"}`)))
+	rows := pgxmock.NewRows(detailCols()).
+		AddRows(append(deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5)), []byte(`{"kind":"Deployment"}`), nil))
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
 		WithArgs("cluster-a:uid-nginx").
@@ -1247,7 +1267,7 @@ func TestGetByGlobalUID_NotFound(t *testing.T) {
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
 		WithArgs("cluster-x:uid-missing").
-		WillReturnRows(pgxmock.NewRows(rawCols()))
+		WillReturnRows(pgxmock.NewRows(detailCols()))
 
 	result, err := GetByGlobalUID(context.Background(), mock, "cluster-x:uid-missing", true)
 	if err != nil {
@@ -1276,8 +1296,9 @@ func TestGetByGlobalUID_WithoutRaw(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	created := now.Add(-24 * time.Hour)
 
-	rows := pgxmock.NewRows(baseCols()).
-		AddRows(deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5)))
+	row := deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5))
+	row = append(row, nil) // status_raw (NULL)
+	rows := pgxmock.NewRows(detailColsNoRaw()).AddRows(row)
 
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
 		WithArgs("cluster-a:uid-nginx").
@@ -1311,6 +1332,7 @@ func TestGetByGlobalUID_QueryError(t *testing.T) {
 		WithArgs("cluster-a:uid-fail").
 		WillReturnError(fmt.Errorf("connection refused"))
 
+	// includeRaw=true, but error happens before scanning so columns don't matter.
 	_, err = GetByGlobalUID(context.Background(), mock, "cluster-a:uid-fail", true)
 	if err == nil {
 		t.Fatal("expected error for query failure")
@@ -1353,6 +1375,348 @@ func TestListResources_UidField(t *testing.T) {
 	}
 	if result.Items[0].Uid != "uid-nginx" {
 		t.Errorf("expected uid=uid-nginx, got %q", result.Items[0].Uid)
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --- StatusRaw tests ---
+
+func TestListResources_StatusRawTrue(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+	statusObj := map[string]any{"phase": "Running", "replicas": 3}
+	statusJSON, _ := json.Marshal(statusObj)
+
+	row := deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5))
+	row = append(row, statusJSON)
+	rows := pgxmock.NewRows(statusRawCols()).AddRows(row)
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
+		WithArgs(deploymentArgs("prod", 51)...).
+		WillReturnRows(rows)
+
+	params := deploymentParams("prod", 50)
+	params.StatusRaw = true
+
+	result, err := ListResources(context.Background(), mock, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(result.Items))
+	}
+
+	item := result.Items[0]
+	if item.StatusRaw == nil {
+		t.Fatal("expected status_raw to be populated")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(item.StatusRaw, &parsed); err != nil {
+		t.Fatalf("status_raw is not valid JSON: %v", err)
+	}
+	if parsed["phase"] != "Running" {
+		t.Errorf("expected status_raw phase=Running, got %v", parsed["phase"])
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListResources_StatusRawNull(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+
+	// status_raw is NULL for this row.
+	row := deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5))
+	row = append(row, nil) // NULL status_raw
+	rows := pgxmock.NewRows(statusRawCols()).AddRows(row)
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
+		WithArgs(deploymentArgs("prod", 51)...).
+		WillReturnRows(rows)
+
+	params := deploymentParams("prod", 50)
+	params.StatusRaw = true
+
+	result, err := ListResources(context.Background(), mock, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(result.Items))
+	}
+
+	item := result.Items[0]
+	if item.StatusRaw != nil {
+		t.Errorf("expected nil status_raw for NULL, got %s", string(item.StatusRaw))
+	}
+
+	// Verify it is omitted from JSON output.
+	data, _ := json.Marshal(item)
+	if strings.Contains(string(data), "status_raw") {
+		t.Errorf("expected status_raw to be omitted from JSON when NULL, got: %s", string(data))
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestListResources_RawAndStatusRaw(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+	rawObj := map[string]any{"kind": "Deployment"}
+	rawJSON, _ := json.Marshal(rawObj)
+	statusObj := map[string]any{"phase": "Running"}
+	statusJSON, _ := json.Marshal(statusObj)
+
+	row := deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5))
+	row = append(row, rawJSON, statusJSON)
+	rows := pgxmock.NewRows(rawAndStatusRawCols()).AddRows(row)
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
+		WithArgs(deploymentArgs("prod", 51)...).
+		WillReturnRows(rows)
+
+	params := deploymentParams("prod", 50)
+	params.Raw = true
+	params.StatusRaw = true
+
+	result, err := ListResources(context.Background(), mock, params)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(result.Items))
+	}
+
+	item := result.Items[0]
+	if item.Raw == nil {
+		t.Fatal("expected raw to be populated")
+	}
+	if item.StatusRaw == nil {
+		t.Fatal("expected status_raw to be populated")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestBuildListQuery_StatusRawColumn(t *testing.T) {
+	p := deploymentParams("default", 50)
+	p.StatusRaw = true
+
+	query, _, err := buildListQuery(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(query, "status_raw") {
+		t.Errorf("expected status_raw in SELECT columns, got:\n%s", query)
+	}
+}
+
+func TestBuildListQuery_RawAndStatusRawColumns(t *testing.T) {
+	p := deploymentParams("default", 50)
+	p.Raw = true
+	p.StatusRaw = true
+
+	query, _, err := buildListQuery(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(query, ", raw") {
+		t.Errorf("expected raw in SELECT columns, got:\n%s", query)
+	}
+	if !strings.Contains(query, ", status_raw") {
+		t.Errorf("expected status_raw in SELECT columns, got:\n%s", query)
+	}
+}
+
+func TestGetByGlobalUID_StatusRawPopulated(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+	statusObj := map[string]any{"phase": "Running"}
+	statusJSON, _ := json.Marshal(statusObj)
+
+	row := deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5))
+	row = append(row, []byte(`{"kind":"Deployment"}`), statusJSON)
+	rows := pgxmock.NewRows(detailCols()).AddRows(row)
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
+		WithArgs("cluster-a:uid-nginx").
+		WillReturnRows(rows)
+
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count=1, got %d", result.Count)
+	}
+
+	item := result.Items[0]
+	if item.StatusRaw == nil {
+		t.Fatal("expected status_raw to be populated in detail response")
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(item.StatusRaw, &parsed); err != nil {
+		t.Fatalf("status_raw is not valid JSON: %v", err)
+	}
+	if parsed["phase"] != "Running" {
+		t.Errorf("expected phase=Running, got %v", parsed["phase"])
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetByGlobalUID_StatusRawNull(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+
+	row := deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5))
+	row = append(row, []byte(`{"kind":"Deployment"}`), nil) // NULL status_raw
+	rows := pgxmock.NewRows(detailCols()).AddRows(row)
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
+		WithArgs("cluster-a:uid-nginx").
+		WillReturnRows(rows)
+
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count=1, got %d", result.Count)
+	}
+
+	item := result.Items[0]
+	if item.Raw == nil {
+		t.Fatal("expected raw to be populated")
+	}
+	if item.StatusRaw != nil {
+		t.Errorf("expected nil status_raw for NULL, got %s", string(item.StatusRaw))
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetByGlobalUID_NoRaw_StatusRawStillIncluded(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+	statusObj := map[string]any{"phase": "Pending"}
+	statusJSON, _ := json.Marshal(statusObj)
+
+	row := deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5))
+	row = append(row, statusJSON) // no raw, but status_raw is present
+	rows := pgxmock.NewRows(detailColsNoRaw()).AddRows(row)
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
+		WithArgs("cluster-a:uid-nginx").
+		WillReturnRows(rows)
+
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count=1, got %d", result.Count)
+	}
+
+	item := result.Items[0]
+	if item.Raw != nil {
+		t.Error("expected raw to be nil when includeRaw=false")
+	}
+	if item.StatusRaw == nil {
+		t.Fatal("expected status_raw to be populated even when includeRaw=false")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestGetByGlobalUID_DuplicateDetection verifies that when LIMIT 2 returns
+// two rows (uniqueness violation), the result correctly reports count=2
+// so the handler can detect and return 500.
+func TestGetByGlobalUID_DuplicateDetection(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+
+	row1 := append(deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5)), []byte(`{"kind":"Deployment"}`), nil)
+	row2 := append(deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(6)), []byte(`{"kind":"Deployment"}`), nil)
+	rows := pgxmock.NewRows(detailCols()).AddRows(row1).AddRows(row2)
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
+		WithArgs("cluster-a:uid-nginx").
+		WillReturnRows(rows)
+
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Count != 2 {
+		t.Fatalf("expected count=2 for duplicate detection, got %d", result.Count)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

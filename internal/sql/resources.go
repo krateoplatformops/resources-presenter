@@ -37,6 +37,7 @@ type ListParams struct {
 	Labels          string // raw JSON string for JSONB containment (@>)
 	Since           *time.Time
 	Raw             bool
+	StatusRaw       bool // include status_raw JSONB column
 	Limit           int
 	Cursor          EncodedCursor
 
@@ -60,7 +61,8 @@ type ResourceItem struct {
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
 	CompositionID *string         `json:"composition_id,omitempty"`
-	Raw           json.RawMessage `json:"raw,omitempty"` // Raw is included only when the raw=true query parameter is set.
+	Raw           json.RawMessage `json:"raw,omitempty"`        // Raw is included only when the raw=true query parameter is set.
+	StatusRaw     json.RawMessage `json:"status_raw,omitempty"` // StatusRaw is included when status_raw=true (list) or by default (detail).
 }
 
 // ListResult is the full response for a list query.
@@ -165,6 +167,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 			compositionID   *string
 			id              int64
 			rawJSON         []byte
+			statusRawJSON   []byte
 		)
 
 		scanDest := []any{
@@ -175,6 +178,9 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 		}
 		if p.Raw {
 			scanDest = append(scanDest, &rawJSON)
+		}
+		if p.StatusRaw {
+			scanDest = append(scanDest, &statusRawJSON)
 		}
 
 		if err := rows.Scan(scanDest...); err != nil {
@@ -197,6 +203,9 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 		}
 		if p.Raw && rawJSON != nil {
 			item.Raw = json.RawMessage(rawJSON)
+		}
+		if p.StatusRaw && statusRawJSON != nil {
+			item.StatusRaw = json.RawMessage(statusRawJSON)
 		}
 
 		items = append(items, item)
@@ -307,6 +316,9 @@ func buildListQuery(p ListParams) (string, []any, error) {
 	if p.Raw {
 		cols += ", raw"
 	}
+	if p.StatusRaw {
+		cols += ", status_raw"
+	}
 
 	baseSQL := fmt.Sprintf("SELECT %s FROM krateo_resources", cols)
 	query, args := b.Render(baseSQL)
@@ -317,13 +329,16 @@ func buildListQuery(p ListParams) (string, []any, error) {
 // It returns a ListResult with count 0 or 1 for response format consistency.
 // When includeRaw is true (the default for the detail endpoint), the full raw
 // Kubernetes object is included in the response.
+// status_raw is always selected for the detail endpoint (single row, negligible cost);
+// NULL values are omitted from JSON via omitempty.
 func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRaw bool) (*ListResult, error) {
 	cols := "resource_name, uid, global_uid, namespace, resource_group, resource_version, resource_kind, resource_plural, cluster_name, created_at, updated_at, composition_id, id"
 	if includeRaw {
 		cols += ", raw"
 	}
+	cols += ", status_raw"
 
-	query := fmt.Sprintf("SELECT %s FROM krateo_resources WHERE global_uid = $1 AND deleted_at IS NULL", cols)
+	query := fmt.Sprintf("SELECT %s FROM krateo_resources WHERE global_uid = $1 AND deleted_at IS NULL LIMIT 2", cols)
 
 	rows, err := db.Query(ctx, query, globalUID)
 	if err != nil {
@@ -333,7 +348,7 @@ func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRa
 
 	result := &ListResult{Items: []ResourceItem{}}
 
-	if rows.Next() {
+	for rows.Next() {
 		var (
 			resourceName    string
 			uid             string
@@ -349,6 +364,7 @@ func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRa
 			compositionID   *string
 			id              int64
 			rawJSON         []byte
+			statusRawJSON   []byte
 		)
 
 		scanDest := []any{
@@ -360,6 +376,7 @@ func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRa
 		if includeRaw {
 			scanDest = append(scanDest, &rawJSON)
 		}
+		scanDest = append(scanDest, &statusRawJSON)
 
 		if err := rows.Scan(scanDest...); err != nil {
 			return nil, fmt.Errorf("get_by_global_uid scan: %w", err)
@@ -381,6 +398,9 @@ func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRa
 		}
 		if includeRaw && rawJSON != nil {
 			item.Raw = json.RawMessage(rawJSON)
+		}
+		if statusRawJSON != nil {
+			item.StatusRaw = json.RawMessage(statusRawJSON)
 		}
 
 		result.Items = append(result.Items, item)

@@ -31,6 +31,7 @@ Both endpoints return items with the same fields:
 | `updated_at` | RFC3339 | Always | When the resource was last updated |
 | `composition_id` | UUID | When set | Krateo composition UUID (omitted when null) |
 | `raw` | object | Conditional | Full Kubernetes object. **List:** only when `raw=true`. **Detail:** included by default, use `?raw=false` to exclude. |
+| `status_raw` | object | Conditional | Kubernetes status subtree (denormalized). **List:** only when `status_raw=true`. **Detail:** always included when present. Omitted when NULL in DB. |
 
 ---
 
@@ -67,6 +68,7 @@ All filters (except `group`) are optional and are combined with `AND`.
 | `labels` | JSON object (string) | Optional. JSONB containment on `raw->'metadata'->'labels'` (`@>`). Must be valid JSON. |
 | `since` | RFC3339 timestamp | Includes resources with `updated_at >= since`. |
 | `raw` | boolean | If `true`, include the full `raw` JSONB field in the response. Default: `false`. |
+| `status_raw` | boolean | If `true`, include the `status_raw` JSONB field (Kubernetes status subtree). Default: `false`. |
 | `limit` | integer | Page size. Default: `100`. Use `-1` for unlimited (returns all results, no pagination). |
 | `cursor` | base64 string | Keyset cursor for pagination (opaque token returned by previous response). |
 
@@ -93,6 +95,7 @@ Example body:
   },
   "since": "2026-03-01T00:00:00Z",
   "raw": true,
+  "status_raw": true,
   "limit": 100,
   "cursor": "<cursor-from-previous-page>"
 }
@@ -105,6 +108,7 @@ Notes:
 - Empty body returns `400`.
 - `limit` defaults to `100` when omitted or `<= 0`.
 - `raw` defaults to `false` when omitted.
+- `status_raw` defaults to `false` when omitted.
 
 ### List Response
 
@@ -395,6 +399,7 @@ Fetches a single resource by its `global_uid`. This endpoint does **not** accept
 | `raw` | boolean | `true` | Include the full Kubernetes object. Set `?raw=false` to exclude. |
 
 Note: `raw` defaults to `true` here (opposite of the list endpoint where it defaults to `false`).
+`status_raw` is always selected on the detail endpoint (no query parameter needed); it is omitted from the response only when NULL in the database.
 
 ### Detail Response
 
@@ -414,7 +419,8 @@ Note: `raw` defaults to `true` here (opposite of the list endpoint where it defa
       "cluster_name": "prod-eu",
       "created_at": "2026-03-01T10:00:00Z",
       "updated_at": "2026-03-06T14:30:00Z",
-      "raw": { "..." }
+      "raw": { "..." },
+      "status_raw": { "..." }
     }
   ]
 }
@@ -423,6 +429,7 @@ Note: `raw` defaults to `true` here (opposite of the list endpoint where it defa
 - `count` is always `0` or `1`
 - No `cursor` field — there is no pagination on the detail endpoint
 - `raw` is included by default; only absent when `?raw=false` is set
+- `status_raw` is always included on the detail endpoint when present in the database; omitted when NULL
 
 ### Detail Examples
 

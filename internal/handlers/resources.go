@@ -90,6 +90,7 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 
 		if parseErr != nil {
 			hl.StatusCode = parseErr.status
+			hl.Err = fmt.Errorf("%s", parseErr.msg)
 			response.Encode(w, response.New(parseErr.status, fmt.Errorf("%s", parseErr.msg)))
 			return
 		}

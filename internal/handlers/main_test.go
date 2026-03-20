@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS krateo_resources (
     resource_name     TEXT NOT NULL,
     composition_id    UUID NULL,
     raw               JSONB NOT NULL,
+    status_raw        JSONB NULL,
     PRIMARY KEY (id)
 );
 

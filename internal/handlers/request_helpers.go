@@ -90,6 +90,7 @@ func parseListParams(r *http.Request) (sql.ListParams, error) {
 		Labels:          labels,
 		Since:           since,
 		Raw:             q.Get("raw") == "true",
+		StatusRaw:       q.Get("status_raw") == "true",
 		Limit:           limit,
 		Cursor:          sql.EncodedCursor(q.Get("cursor")),
 	}
@@ -114,12 +115,21 @@ type resourcesJSONPayload struct {
 	Labels        map[string]any `json:"labels"`
 	Since         *time.Time     `json:"since"`
 	Raw           *bool          `json:"raw"`
+	StatusRaw     *bool          `json:"status_raw"`
 	Limit         *int           `json:"limit"`
 	Cursor        string         `json:"cursor"`
 }
 
+// maxBodySize is the maximum allowed POST body size (1 MB).
+// This prevents clients from sending arbitrarily large JSON bodies
+// that could exhaust server memory.
+const maxBodySize = 1 << 20
+
 func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 	defer r.Body.Close()
+
+	// Enforce body size limit before reading.
+	r.Body = http.MaxBytesReader(nil, r.Body, maxBodySize)
 
 	var payload resourcesJSONPayload
 	dec := json.NewDecoder(r.Body)
@@ -128,6 +138,10 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 	if err := dec.Decode(&payload); err != nil {
 		if err == io.EOF {
 			return sql.ListParams{}, fmt.Errorf("empty JSON body")
+		}
+		// MaxBytesReader returns *http.MaxBytesError when the limit is exceeded.
+		if err.Error() == "http: request body too large" {
+			return sql.ListParams{}, fmt.Errorf("request body too large (max %d bytes)", maxBodySize)
 		}
 		return sql.ListParams{}, fmt.Errorf("invalid JSON body: %w", err)
 	}
@@ -167,6 +181,11 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 		raw = *payload.Raw
 	}
 
+	statusRaw := false
+	if payload.StatusRaw != nil {
+		statusRaw = *payload.StatusRaw
+	}
+
 	p := sql.ListParams{
 		ResourceGroup:   payload.Group,
 		ResourceVersion: payload.Version,
@@ -179,6 +198,7 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 		Labels:          labels,
 		Since:           payload.Since,
 		Raw:             raw,
+		StatusRaw:       statusRaw,
 		Limit:           limit,
 		Cursor:          sql.EncodedCursor(payload.Cursor),
 	}
@@ -192,7 +212,7 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 
 func parseLimit(v string) (int, error) {
 	limit := defaultLimit
-	if v != "" {
+	if v != "" && v != "null" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			return 0, fmt.Errorf("invalid limit: %w", err)
