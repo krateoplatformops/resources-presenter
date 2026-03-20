@@ -280,8 +280,8 @@ curl -s -X POST http://localhost:8080/resources \
 ```sh
 # Get a resource's global_uid from the list response, then fetch its detail
 GLOBAL_UID=$(curl -s -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&limit=1' \
-  | jq -r '.items[0].global_uid')
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&limit=2' \
+  | jq -r '.items[1].global_uid')
 echo "GLOBAL_UID=$GLOBAL_UID"
 
 # Fetch detail (raw included by default)
@@ -291,6 +291,10 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 # Fetch detail without raw
 curl -s -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8080/resources/$GLOBAL_UID?raw=false" | jq
+
+ # Fetch detail without raw and without status_raw
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/resources/$GLOBAL_UID?raw=false&status_raw=false" | jq
 ```
 
 **Expected error cases:**
