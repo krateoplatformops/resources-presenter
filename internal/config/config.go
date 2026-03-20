@@ -14,7 +14,7 @@ import (
 
 const (
 	serviceName           = "resources-presenter"
-	defaultDbReadyTimeout = 4 * time.Minute
+	defaultDbReadyTimeout = 5 * time.Minute
 	defaultDebug          = false
 )
 

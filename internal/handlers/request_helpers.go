@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,7 +23,7 @@ type handlerError struct {
 // parseRequest validates the request and extracts params from query string (GET) or JSON body (POST).
 // The resource type is identified by the required group parameter; version, resource, and namespace
 // are optional filters used to narrow the discovery query and subsequent RBAC checks.
-func parseRequest(r *http.Request) (sql.ListParams, *handlerError) {
+func parseRequest(w http.ResponseWriter, r *http.Request) (sql.ListParams, *handlerError) {
 	var (
 		params sql.ListParams
 		err    error
@@ -30,7 +31,7 @@ func parseRequest(r *http.Request) (sql.ListParams, *handlerError) {
 
 	switch r.Method {
 	case http.MethodPost:
-		params, err = parseListParamsJSON(r)
+		params, err = parseListParamsJSON(w, r)
 	default:
 		params, err = parseListParams(r)
 	}
@@ -123,13 +124,13 @@ type resourcesJSONPayload struct {
 // maxBodySize is the maximum allowed POST body size (1 MB).
 // This prevents clients from sending arbitrarily large JSON bodies
 // that could exhaust server memory.
-const maxBodySize = 1 << 20
+const maxBodySize = 1 << 20 // 1 MB
 
-func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
+func parseListParamsJSON(w http.ResponseWriter, r *http.Request) (sql.ListParams, error) {
 	defer r.Body.Close()
 
 	// Enforce body size limit before reading.
-	r.Body = http.MaxBytesReader(nil, r.Body, maxBodySize)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 
 	var payload resourcesJSONPayload
 	dec := json.NewDecoder(r.Body)
@@ -140,7 +141,8 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 			return sql.ListParams{}, fmt.Errorf("empty JSON body")
 		}
 		// MaxBytesReader returns *http.MaxBytesError when the limit is exceeded.
-		if err.Error() == "http: request body too large" {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
 			return sql.ListParams{}, fmt.Errorf("request body too large (max %d bytes)", maxBodySize)
 		}
 		return sql.ListParams{}, fmt.Errorf("invalid JSON body: %w", err)
@@ -157,15 +159,9 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 		return sql.ListParams{}, fmt.Errorf("field 'group' is required")
 	}
 
-	limit := defaultLimit
-	if payload.Limit != nil {
-		limit = *payload.Limit
-		if limit <= 0 {
-			return sql.ListParams{}, fmt.Errorf("limit must be a positive integer (got %d)", limit)
-		}
-		if limit > maxLimit {
-			return sql.ListParams{}, fmt.Errorf("limit exceeds maximum allowed (%d)", maxLimit)
-		}
+	limit, err := parseLimitPtr(payload.Limit)
+	if err != nil {
+		return sql.ListParams{}, err
 	}
 
 	var labels string
@@ -175,16 +171,6 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 			return sql.ListParams{}, fmt.Errorf("invalid labels JSON")
 		}
 		labels = string(rawLabels)
-	}
-
-	raw := false
-	if payload.Raw != nil {
-		raw = *payload.Raw
-	}
-
-	statusRaw := false
-	if payload.StatusRaw != nil {
-		statusRaw = *payload.StatusRaw
 	}
 
 	p := sql.ListParams{
@@ -198,8 +184,8 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 		NameContains:    payload.NameContains,
 		Labels:          labels,
 		Since:           payload.Since,
-		Raw:             raw,
-		StatusRaw:       statusRaw,
+		Raw:             derefBool(payload.Raw, false),
+		StatusRaw:       derefBool(payload.StatusRaw, false),
 		Limit:           limit,
 		Cursor:          sql.EncodedCursor(payload.Cursor),
 	}
@@ -211,6 +197,19 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 	return p, nil
 }
 
+// validateLimit checks that a limit value is within [1, maxLimit].
+func validateLimit(n int) error {
+	if n <= 0 {
+		return fmt.Errorf("limit must be a positive integer (got %d)", n)
+	}
+	if n > maxLimit {
+		return fmt.Errorf("limit exceeds maximum allowed (%d)", maxLimit)
+	}
+	return nil
+}
+
+// parseLimit validates a string limit from query parameters, returning defaultLimit when empty or "null".
+// Used for GET /resources?limit=...
 func parseLimit(v string) (int, error) {
 	if v == "" || v == "null" {
 		return defaultLimit, nil
@@ -219,11 +218,28 @@ func parseLimit(v string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("invalid limit: %w", err)
 	}
-	if n <= 0 {
-		return 0, fmt.Errorf("limit must be a positive integer (got %d)", n)
-	}
-	if n > maxLimit {
-		return 0, fmt.Errorf("limit exceeds maximum allowed (%d)", maxLimit)
+	if err := validateLimit(n); err != nil {
+		return 0, err
 	}
 	return n, nil
+}
+
+// parseLimitPtr validates a *int limit from JSON input, returning defaultLimit when nil.
+// Used for POST /resources with JSON body {"limit": ...}
+func parseLimitPtr(v *int) (int, error) {
+	if v == nil {
+		return defaultLimit, nil
+	}
+	if err := validateLimit(*v); err != nil {
+		return 0, err
+	}
+	return *v, nil
+}
+
+// derefBool returns *b if non-nil, otherwise def.
+func derefBool(b *bool, def bool) bool {
+	if b != nil {
+		return *b
+	}
+	return def
 }

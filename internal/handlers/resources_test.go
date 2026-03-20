@@ -959,7 +959,7 @@ func TestParseRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", tt.url, nil)
-			params, herr := parseRequest(req)
+			params, herr := parseRequest(httptest.NewRecorder(), req)
 
 			if tt.wantStatus != 0 {
 				if herr == nil {
@@ -1054,7 +1054,7 @@ func TestParseListParamsJSON_OK(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
-	got, err := parseListParamsJSON(req)
+	got, err := parseListParamsJSON(httptest.NewRecorder(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1100,7 +1100,7 @@ func TestParseListParamsJSON_OK(t *testing.T) {
 func TestParseListParamsJSON_DefaultLimit(t *testing.T) {
 	// When limit is omitted, it defaults to defaultLimit.
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default"}`))
-	got, err := parseListParamsJSON(req)
+	got, err := parseListParamsJSON(httptest.NewRecorder(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1111,7 +1111,7 @@ func TestParseListParamsJSON_DefaultLimit(t *testing.T) {
 
 func TestParseListParamsJSON_ZeroLimitReturnsError(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":0}`))
-	_, err := parseListParamsJSON(req)
+	_, err := parseListParamsJSON(httptest.NewRecorder(), req)
 	if err == nil {
 		t.Fatal("expected error for limit=0, got nil")
 	}
@@ -1122,7 +1122,7 @@ func TestParseListParamsJSON_ZeroLimitReturnsError(t *testing.T) {
 
 func TestParseListParamsJSON_UnknownField(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","bad":"x"}`))
-	_, err := parseListParamsJSON(req)
+	_, err := parseListParamsJSON(httptest.NewRecorder(), req)
 	if err == nil {
 		t.Fatal("expected error for unknown field")
 	}
@@ -1130,7 +1130,7 @@ func TestParseListParamsJSON_UnknownField(t *testing.T) {
 
 func TestParseListParamsJSON_EmptyBody(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(""))
-	_, err := parseListParamsJSON(req)
+	_, err := parseListParamsJSON(httptest.NewRecorder(), req)
 	if err == nil {
 		t.Fatal("expected error for empty body")
 	}
@@ -1138,7 +1138,7 @@ func TestParseListParamsJSON_EmptyBody(t *testing.T) {
 
 func TestParseListParamsJSON_MultipleValues(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default"}{"group":"apps","version":"v1","resource":"deployments","namespace":"default"}`))
-	_, err := parseListParamsJSON(req)
+	_, err := parseListParamsJSON(httptest.NewRecorder(), req)
 	if err == nil {
 		t.Fatal("expected error for multiple JSON values")
 	}
@@ -1146,7 +1146,7 @@ func TestParseListParamsJSON_MultipleValues(t *testing.T) {
 
 func TestParseListParamsJSON_GroupOnly(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps"}`))
-	got, err := parseListParamsJSON(req)
+	got, err := parseListParamsJSON(httptest.NewRecorder(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1198,7 +1198,7 @@ func TestParseRequest_NamespaceDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", tt.url, nil)
-			params, herr := parseRequest(req)
+			params, herr := parseRequest(httptest.NewRecorder(), req)
 			if herr != nil {
 				t.Fatalf("unexpected error: %d %s", herr.status, herr.msg)
 			}
@@ -1243,7 +1243,7 @@ func TestParseListParamsJSON_NamespaceDefaults(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("POST", "/resources", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
-			got, err := parseListParamsJSON(req)
+			got, err := parseListParamsJSON(httptest.NewRecorder(), req)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -1256,7 +1256,7 @@ func TestParseListParamsJSON_NamespaceDefaults(t *testing.T) {
 
 func TestParseListParamsJSON_StatusRaw(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","status_raw":true}`))
-	got, err := parseListParamsJSON(req)
+	got, err := parseListParamsJSON(httptest.NewRecorder(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1267,7 +1267,7 @@ func TestParseListParamsJSON_StatusRaw(t *testing.T) {
 
 func TestParseListParamsJSON_StatusRawDefault(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default"}`))
-	got, err := parseListParamsJSON(req)
+	got, err := parseListParamsJSON(httptest.NewRecorder(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1280,7 +1280,7 @@ func TestParseListParamsJSON_StatusRawDefault(t *testing.T) {
 
 func TestParseListParamsJSON_NegativeLimitReturnsError(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":-1}`))
-	_, err := parseListParamsJSON(req)
+	_, err := parseListParamsJSON(httptest.NewRecorder(), req)
 	if err == nil {
 		t.Fatal("expected error for limit=-1, got nil")
 	}
@@ -1291,7 +1291,7 @@ func TestParseListParamsJSON_NegativeLimitReturnsError(t *testing.T) {
 
 func TestParseListParamsJSON_ExceedsMaxLimit(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":5001}`))
-	_, err := parseListParamsJSON(req)
+	_, err := parseListParamsJSON(httptest.NewRecorder(), req)
 	if err == nil {
 		t.Fatal("expected error for limit > maxLimit, got nil")
 	}
@@ -1302,7 +1302,7 @@ func TestParseListParamsJSON_ExceedsMaxLimit(t *testing.T) {
 
 func TestParseListParamsJSON_AtMaxLimit(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":5000}`))
-	got, err := parseListParamsJSON(req)
+	got, err := parseListParamsJSON(httptest.NewRecorder(), req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2335,7 +2335,7 @@ func TestParseListParamsJSON_BodyTooLarge(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
-	_, herr := parseRequest(req)
+	_, herr := parseRequest(httptest.NewRecorder(), req)
 	if herr == nil {
 		t.Fatal("expected error for oversized body, got nil")
 	}
@@ -2354,7 +2354,7 @@ func TestParseListParamsJSON_NameTooLong(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
-	_, herr := parseRequest(req)
+	_, herr := parseRequest(httptest.NewRecorder(), req)
 	if herr == nil {
 		t.Fatal("expected error for oversized name, got nil")
 	}

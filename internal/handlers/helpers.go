@@ -54,29 +54,23 @@ const (
 // It checks input lengths, composition_id format, name/name_contains mutual exclusion, and cursor validity.
 func validateListParams(p *sql.ListParams) error {
 	// Length checks: reject oversized inputs before any further processing.
-	if len(p.ResourceGroup) > maxStringParamLen {
-		return fmt.Errorf("'group' exceeds maximum length (%d)", maxStringParamLen)
-	}
-	if len(p.ResourceVersion) > maxStringParamLen {
-		return fmt.Errorf("'version' exceeds maximum length (%d)", maxStringParamLen)
-	}
-	if len(p.ResourcePlural) > maxStringParamLen {
-		return fmt.Errorf("'resource' exceeds maximum length (%d)", maxStringParamLen)
-	}
-	if len(p.Cluster) > maxStringParamLen {
-		return fmt.Errorf("'cluster' exceeds maximum length (%d)", maxStringParamLen)
-	}
-	if len(p.Namespace) > maxStringParamLen {
-		return fmt.Errorf("'namespace' exceeds maximum length (%d)", maxStringParamLen)
-	}
-	if len(p.Name) > maxStringParamLen {
-		return fmt.Errorf("'name' exceeds maximum length (%d)", maxStringParamLen)
-	}
-	if len(p.NameContains) > maxStringParamLen {
-		return fmt.Errorf("'name_contains' exceeds maximum length (%d)", maxStringParamLen)
-	}
-	if len(p.Labels) > maxLabelsLen {
-		return fmt.Errorf("'labels' exceeds maximum length (%d)", maxLabelsLen)
+	for _, check := range []struct {
+		val    string
+		name   string
+		maxLen int
+	}{
+		{p.ResourceGroup, "group", maxStringParamLen},
+		{p.ResourceVersion, "version", maxStringParamLen},
+		{p.ResourcePlural, "resource", maxStringParamLen},
+		{p.Cluster, "cluster", maxStringParamLen},
+		{p.Namespace, "namespace", maxStringParamLen},
+		{p.Name, "name", maxStringParamLen},
+		{p.NameContains, "name_contains", maxStringParamLen},
+		{p.Labels, "labels", maxLabelsLen},
+	} {
+		if len(check.val) > check.maxLen {
+			return fmt.Errorf("'%s' exceeds maximum length (%d)", check.name, check.maxLen)
+		}
 	}
 
 	if p.CompositionID != "" && !uuidRegex.MatchString(p.CompositionID) {
