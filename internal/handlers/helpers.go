@@ -44,9 +44,41 @@ func normalizeNamespace(ns string) string {
 	}
 }
 
+// Input length limits to prevent excessive memory allocation and slow queries.
+const (
+	maxStringParamLen = 256  // name, name_contains, cluster, resource, version, namespace
+	maxLabelsLen      = 4096 // labels JSON string
+)
+
 // validateListParams runs shared validations on an already-populated ListParams.
-// It checks composition_id format, name/name_contains mutual exclusion, and cursor validity.
+// It checks input lengths, composition_id format, name/name_contains mutual exclusion, and cursor validity.
 func validateListParams(p *sql.ListParams) error {
+	// Length checks: reject oversized inputs before any further processing.
+	if len(p.ResourceGroup) > maxStringParamLen {
+		return fmt.Errorf("'group' exceeds maximum length (%d)", maxStringParamLen)
+	}
+	if len(p.ResourceVersion) > maxStringParamLen {
+		return fmt.Errorf("'version' exceeds maximum length (%d)", maxStringParamLen)
+	}
+	if len(p.ResourcePlural) > maxStringParamLen {
+		return fmt.Errorf("'resource' exceeds maximum length (%d)", maxStringParamLen)
+	}
+	if len(p.Cluster) > maxStringParamLen {
+		return fmt.Errorf("'cluster' exceeds maximum length (%d)", maxStringParamLen)
+	}
+	if len(p.Namespace) > maxStringParamLen {
+		return fmt.Errorf("'namespace' exceeds maximum length (%d)", maxStringParamLen)
+	}
+	if len(p.Name) > maxStringParamLen {
+		return fmt.Errorf("'name' exceeds maximum length (%d)", maxStringParamLen)
+	}
+	if len(p.NameContains) > maxStringParamLen {
+		return fmt.Errorf("'name_contains' exceeds maximum length (%d)", maxStringParamLen)
+	}
+	if len(p.Labels) > maxLabelsLen {
+		return fmt.Errorf("'labels' exceeds maximum length (%d)", maxLabelsLen)
+	}
+
 	if p.CompositionID != "" && !uuidRegex.MatchString(p.CompositionID) {
 		return fmt.Errorf("invalid composition_id: not a valid UUID")
 	}

@@ -37,10 +37,11 @@ type ListParams struct {
 	Labels          string // raw JSON string for JSONB containment (@>)
 	Since           *time.Time
 	Raw             bool
+	StatusRaw       bool // include status_raw JSONB column
 	Limit           int
 	Cursor          EncodedCursor
 
-	// AllowedTargets restricts the query to only these (resource, namespace) pairs.
+	// AllowedTargets restricts the query to only these (group, resource, namespace) triples.
 	// When set, it replaces the individual ResourcePlural and Namespace filters.
 	// Populated by the handler after discovery and RBAC filtering.
 	AllowedTargets []ResourceTarget
@@ -60,7 +61,8 @@ type ResourceItem struct {
 	CreatedAt     time.Time       `json:"created_at"`
 	UpdatedAt     time.Time       `json:"updated_at"`
 	CompositionID *string         `json:"composition_id,omitempty"`
-	Raw           json.RawMessage `json:"raw,omitempty"` // Raw is included only when the raw=true query parameter is set.
+	Raw           json.RawMessage `json:"raw,omitempty"`        // Raw is included only when the raw=true query parameter is set.
+	StatusRaw     json.RawMessage `json:"status_raw,omitempty"` // StatusRaw is included when status_raw=true (list) or by default (detail).
 }
 
 // ListResult is the full response for a list query.
@@ -143,13 +145,15 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 
 	// Pre-allocate to avoid repeated growing for large result sets.
 	initialCap := p.Limit + 1
-	if p.Limit <= 0 {
-		initialCap = 256 // reasonable default for unlimited queries
-	}
 	items := make([]ResourceItem, 0, initialCap)
 	cursors := make([]rowCursor, 0, initialCap)
 
 	for rows.Next() {
+		// Stop scanning promptly when the request is cancelled (client disconnect, timeout).
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		var (
 			resourceName    string
 			uid             string
@@ -165,6 +169,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 			compositionID   *string
 			id              int64
 			rawJSON         []byte
+			statusRawJSON   []byte
 		)
 
 		scanDest := []any{
@@ -175,6 +180,9 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 		}
 		if p.Raw {
 			scanDest = append(scanDest, &rawJSON)
+		}
+		if p.StatusRaw {
+			scanDest = append(scanDest, &statusRawJSON)
 		}
 
 		if err := rows.Scan(scanDest...); err != nil {
@@ -198,6 +206,9 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 		if p.Raw && rawJSON != nil {
 			item.Raw = json.RawMessage(rawJSON)
 		}
+		if p.StatusRaw && statusRawJSON != nil {
+			item.StatusRaw = json.RawMessage(statusRawJSON)
+		}
 
 		items = append(items, item)
 		cursors = append(cursors, rowCursor{updatedAt: updatedAt, id: id})
@@ -208,8 +219,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 
 	result := &ListResult{}
 
-	// Pagination: only applies when a finite limit is set.
-	// When Limit == -1 (unlimited), all rows are returned with no cursor.
+	// Pagination: trim to requested limit and compute next-page cursor.
 	if p.Limit > 0 {
 		hasNextPage := len(items) > p.Limit
 		if hasNextPage {
@@ -250,16 +260,18 @@ func buildListQuery(p ListParams) (string, []any, error) {
 		b.Where("resource_version = ?", p.ResourceVersion)
 	}
 
-	// Restrict to RBAC-allowed (resource_plural, namespace) pairs.
+	// Restrict to RBAC-allowed (resource_group, resource_plural, namespace) triples.
 	// AllowedTargets must be populated by the handler after discovery + RBAC filtering.
+	// The group column is required to distinguish resources with the same plural name
+	// but different API groups (e.g. github:repoes vs gitlab:repoes).
 	if len(p.AllowedTargets) > 0 {
 		parts := make([]string, len(p.AllowedTargets))
-		args := make([]any, 0, len(p.AllowedTargets)*2)
+		args := make([]any, 0, len(p.AllowedTargets)*3)
 		for i, t := range p.AllowedTargets {
-			parts[i] = "(?, ?)"
-			args = append(args, t.Resource, t.Namespace)
+			parts[i] = "(?, ?, ?)"
+			args = append(args, t.Group, t.Resource, t.Namespace)
 		}
-		b.Where(fmt.Sprintf("(resource_plural, namespace) IN (%s)", strings.Join(parts, ", ")), args...)
+		b.Where(fmt.Sprintf("(resource_group, resource_plural, namespace) IN (%s)", strings.Join(parts, ", ")), args...)
 	}
 
 	if p.Cluster != "" {
@@ -297,7 +309,7 @@ func buildListQuery(p ListParams) (string, []any, error) {
 
 	b.OrderBy("updated_at DESC, id DESC")
 
-	// Fetch limit+1 to detect next page; skip when unlimited (Limit == -1).
+	// Fetch limit+1 to detect whether a next page exists.
 	if p.Limit > 0 {
 		b.Limit(p.Limit + 1)
 	}
@@ -306,6 +318,9 @@ func buildListQuery(p ListParams) (string, []any, error) {
 	cols := "resource_name, uid, global_uid, namespace, resource_group, resource_version, resource_kind, resource_plural, cluster_name, created_at, updated_at, composition_id, id"
 	if p.Raw {
 		cols += ", raw"
+	}
+	if p.StatusRaw {
+		cols += ", status_raw"
 	}
 
 	baseSQL := fmt.Sprintf("SELECT %s FROM krateo_resources", cols)
@@ -317,13 +332,18 @@ func buildListQuery(p ListParams) (string, []any, error) {
 // It returns a ListResult with count 0 or 1 for response format consistency.
 // When includeRaw is true (the default for the detail endpoint), the full raw
 // Kubernetes object is included in the response.
-func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRaw bool) (*ListResult, error) {
+// When includeStatusRaw is true (the default), the status_raw JSONB column is
+// included; callers can pass false to omit it.
+func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRaw, includeStatusRaw bool) (*ListResult, error) {
 	cols := "resource_name, uid, global_uid, namespace, resource_group, resource_version, resource_kind, resource_plural, cluster_name, created_at, updated_at, composition_id, id"
 	if includeRaw {
 		cols += ", raw"
 	}
+	if includeStatusRaw {
+		cols += ", status_raw"
+	}
 
-	query := fmt.Sprintf("SELECT %s FROM krateo_resources WHERE global_uid = $1 AND deleted_at IS NULL", cols)
+	query := fmt.Sprintf("SELECT %s FROM krateo_resources WHERE global_uid = $1 AND deleted_at IS NULL LIMIT 2", cols)
 
 	rows, err := db.Query(ctx, query, globalUID)
 	if err != nil {
@@ -333,7 +353,7 @@ func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRa
 
 	result := &ListResult{Items: []ResourceItem{}}
 
-	if rows.Next() {
+	for rows.Next() {
 		var (
 			resourceName    string
 			uid             string
@@ -349,6 +369,7 @@ func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRa
 			compositionID   *string
 			id              int64
 			rawJSON         []byte
+			statusRawJSON   []byte
 		)
 
 		scanDest := []any{
@@ -359,6 +380,9 @@ func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRa
 		}
 		if includeRaw {
 			scanDest = append(scanDest, &rawJSON)
+		}
+		if includeStatusRaw {
+			scanDest = append(scanDest, &statusRawJSON)
 		}
 
 		if err := rows.Scan(scanDest...); err != nil {
@@ -381,6 +405,9 @@ func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRa
 		}
 		if includeRaw && rawJSON != nil {
 			item.Raw = json.RawMessage(rawJSON)
+		}
+		if includeStatusRaw && statusRawJSON != nil {
+			item.StatusRaw = json.RawMessage(statusRawJSON)
 		}
 
 		result.Items = append(result.Items, item)

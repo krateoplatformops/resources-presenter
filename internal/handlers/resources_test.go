@@ -901,8 +901,56 @@ func TestParseRequest(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "limit=-1 means unlimited",
+			name:       "limit=-1 returns 400",
 			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&limit=-1",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "limit=0 returns 400",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&limit=0",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "limit exceeding max returns 400",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&limit=5001",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "limit at max is accepted",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&limit=5000",
+			wantGroup:  "apps",
+			wantPlural: "deployments",
+		},
+		{
+			name:       "limit=null treated as default (not 400)",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&limit=null",
+			wantGroup:  "apps",
+			wantPlural: "deployments",
+		},
+		{
+			name:       "status_raw param accepted",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&status_raw=true",
+			wantGroup:  "apps",
+			wantPlural: "deployments",
+		},
+		{
+			name:       "name exceeding max length returns 400",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&name=" + strings.Repeat("a", 257),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "name_contains exceeding max length returns 400",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&name_contains=" + strings.Repeat("a", 257),
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "labels exceeding max length returns 400",
+			url:        `/resources?group=apps&version=v1&resource=deployments&namespace=default&labels={"k":"` + strings.Repeat("v", 4090) + `"}`,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "name at max length is accepted",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&name=" + strings.Repeat("a", 256),
 			wantGroup:  "apps",
 			wantPlural: "deployments",
 		},
@@ -957,10 +1005,22 @@ func TestParseRequest(t *testing.T) {
 					t.Fatalf("expected Namespace=default, got %q", params.Namespace)
 				}
 			}
-			// Verify limit=-1 is unlimited.
-			if tt.name == "limit=-1 means unlimited" {
-				if params.Limit != -1 {
-					t.Fatalf("expected Limit=-1, got %d", params.Limit)
+			// Verify limit at max is accepted.
+			if tt.name == "limit at max is accepted" {
+				if params.Limit != maxLimit {
+					t.Fatalf("expected Limit=%d, got %d", maxLimit, params.Limit)
+				}
+			}
+			// Verify limit=null is treated as default.
+			if tt.name == "limit=null treated as default (not 400)" {
+				if params.Limit != defaultLimit {
+					t.Fatalf("expected Limit=%d (default), got %d", defaultLimit, params.Limit)
+				}
+			}
+			// Verify status_raw param is parsed.
+			if tt.name == "status_raw param accepted" {
+				if !params.StatusRaw {
+					t.Fatal("expected StatusRaw=true")
 				}
 			}
 		})
@@ -1038,13 +1098,25 @@ func TestParseListParamsJSON_OK(t *testing.T) {
 }
 
 func TestParseListParamsJSON_DefaultLimit(t *testing.T) {
-	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":0}`))
+	// When limit is omitted, it defaults to defaultLimit.
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default"}`))
 	got, err := parseListParamsJSON(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.Limit != defaultLimit {
 		t.Fatalf("expected default limit %d, got %d", defaultLimit, got.Limit)
+	}
+}
+
+func TestParseListParamsJSON_ZeroLimitReturnsError(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":0}`))
+	_, err := parseListParamsJSON(req)
+	if err == nil {
+		t.Fatal("expected error for limit=0, got nil")
+	}
+	if !strings.Contains(err.Error(), "limit must be a positive integer") {
+		t.Fatalf("expected 'limit must be a positive integer' error, got: %v", err)
 	}
 }
 
@@ -1182,16 +1254,60 @@ func TestParseListParamsJSON_NamespaceDefaults(t *testing.T) {
 	}
 }
 
-// --- Unlimited limit tests (POST JSON) ---
-
-func TestParseListParamsJSON_UnlimitedLimit(t *testing.T) {
-	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":-1}`))
+func TestParseListParamsJSON_StatusRaw(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","status_raw":true}`))
 	got, err := parseListParamsJSON(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.Limit != -1 {
-		t.Fatalf("expected limit=-1, got %d", got.Limit)
+	if !got.StatusRaw {
+		t.Fatal("expected StatusRaw=true")
+	}
+}
+
+func TestParseListParamsJSON_StatusRawDefault(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default"}`))
+	got, err := parseListParamsJSON(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.StatusRaw {
+		t.Fatal("expected StatusRaw=false by default")
+	}
+}
+
+// --- Limit enforcement tests (POST JSON) ---
+
+func TestParseListParamsJSON_NegativeLimitReturnsError(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":-1}`))
+	_, err := parseListParamsJSON(req)
+	if err == nil {
+		t.Fatal("expected error for limit=-1, got nil")
+	}
+	if !strings.Contains(err.Error(), "limit must be a positive integer") {
+		t.Fatalf("expected 'limit must be a positive integer' error, got: %v", err)
+	}
+}
+
+func TestParseListParamsJSON_ExceedsMaxLimit(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":5001}`))
+	_, err := parseListParamsJSON(req)
+	if err == nil {
+		t.Fatal("expected error for limit > maxLimit, got nil")
+	}
+	if !strings.Contains(err.Error(), "limit exceeds maximum") {
+		t.Fatalf("expected 'limit exceeds maximum' error, got: %v", err)
+	}
+}
+
+func TestParseListParamsJSON_AtMaxLimit(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":5000}`))
+	got, err := parseListParamsJSON(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Limit != 5000 {
+		t.Fatalf("expected limit=5000, got %d", got.Limit)
 	}
 }
 
@@ -1669,6 +1785,119 @@ func TestResourceDetail_MethodNotAllowed(t *testing.T) {
 	}
 }
 
+// TestResourceDetail_StatusRawPopulated verifies that status_raw is returned
+// in the detail endpoint when the DB row has a non-NULL status_raw.
+func TestResourceDetail_StatusRawPopulated(t *testing.T) {
+	db := testDB(t)
+
+	applySchema(t, db)
+
+	statusObj := map[string]any{"phase": "Running", "replicas": 3}
+	statusJSON, _ := json.Marshal(statusObj)
+	rawObj := map[string]any{"apiVersion": "apps/v1", "kind": "Deployment", "metadata": map[string]any{"name": "nginx", "namespace": "default"}}
+	rawJSON, _ := json.Marshal(rawObj)
+
+	// Seed a single resource with status_raw populated.
+	_, err := db.Exec(context.Background(), `
+INSERT INTO krateo_resources (
+	updated_at, cluster_name, uid, global_uid, namespace,
+	resource_group, resource_version, resource_kind, resource_plural, resource_name,
+	raw, status_raw
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+`,
+		time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
+		"cluster-a", "uid-status-test", "cluster-a:uid-status-test", "default",
+		"apps", "v1", "Deployment", "deployments", "nginx",
+		rawJSON, statusJSON,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+
+	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-status-test", nil)
+	req.SetPathValue("global_uid", "cluster-a:uid-status-test")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	items := extractItems(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+
+	item := items[0].(map[string]any)
+	statusRaw, ok := item["status_raw"]
+	if !ok {
+		t.Fatal("expected status_raw field in detail response")
+	}
+	statusMap, ok := statusRaw.(map[string]any)
+	if !ok {
+		t.Fatalf("expected status_raw to be a JSON object, got %T", statusRaw)
+	}
+	if statusMap["phase"] != "Running" {
+		t.Errorf("expected status_raw.phase=Running, got %v", statusMap["phase"])
+	}
+}
+
+// TestResourceDetail_StatusRawNull verifies that status_raw is omitted from the
+// detail response when the DB row has a NULL status_raw.
+func TestResourceDetail_StatusRawNull(t *testing.T) {
+	db := testDB(t)
+
+	applySchema(t, db)
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	// Seed with normal helper (does not set status_raw, so it stays NULL).
+	seedResources(t, db, seedOptions{
+		Cluster:         "cluster-a",
+		Namespace:       "default",
+		ResourceGroup:   "apps",
+		ResourceVersion: "v1",
+		ResourceKind:    "Deployment",
+		ResourcePlural:  "deployments",
+		Count:           1,
+		StartTime:       now,
+		Delta:           time.Second,
+	})
+
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+
+	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-0000", nil)
+	req.SetPathValue("global_uid", "cluster-a:uid-0000")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	items := extractItems(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+
+	item := items[0].(map[string]any)
+	if _, ok := item["status_raw"]; ok {
+		t.Error("expected status_raw to be omitted from response when NULL in DB")
+	}
+}
+
 // TestResourcesList_GlobalUIDInResponse verifies that global_uid is returned in the list endpoint response.
 func TestResourcesList_GlobalUIDInResponse(t *testing.T) {
 	db := testDB(t)
@@ -1733,6 +1962,7 @@ CREATE TABLE IF NOT EXISTS krateo_resources (
     resource_name     TEXT NOT NULL,
     composition_id    UUID NULL,
     raw               JSONB NOT NULL,
+    status_raw        JSONB NULL,
     PRIMARY KEY (id)
 );
 
@@ -2092,5 +2322,43 @@ func TestBuildGVR(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("buildGVR(%q, %q, %q) = %q, want %q", tt.group, tt.version, tt.plural, got, tt.want)
 		}
+	}
+}
+
+// --- Unit test: POST body size limit ---
+
+func TestParseListParamsJSON_BodyTooLarge(t *testing.T) {
+	// Build a JSON body that exceeds maxBodySize (1 MB).
+	bigValue := strings.Repeat("x", maxBodySize+1)
+	body := fmt.Sprintf(`{"group":"apps","name":"%s"}`, bigValue)
+
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	_, herr := parseRequest(req)
+	if herr == nil {
+		t.Fatal("expected error for oversized body, got nil")
+	}
+	if herr.status != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d: %s", herr.status, herr.msg)
+	}
+	if !strings.Contains(herr.msg, "too large") {
+		t.Fatalf("expected 'too large' in error message, got: %s", herr.msg)
+	}
+}
+
+// --- Unit test: input length validation via POST ---
+
+func TestParseListParamsJSON_NameTooLong(t *testing.T) {
+	body := fmt.Sprintf(`{"group":"apps","name":"%s"}`, strings.Repeat("a", 257))
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	_, herr := parseRequest(req)
+	if herr == nil {
+		t.Fatal("expected error for oversized name, got nil")
+	}
+	if herr.status != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d: %s", herr.status, herr.msg)
 	}
 }

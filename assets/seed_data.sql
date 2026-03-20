@@ -9,6 +9,7 @@ DECLARE
   uid_val TEXT;
   name_val TEXT;
   raw_val JSONB;
+  status_raw_val JSONB;
 BEGIN
   FOR rep IN 1..7 LOOP                                  -- repeat to reach 500
     FOREACH c IN ARRAY clusters LOOP
@@ -52,15 +53,33 @@ BEGIN
           )
         );
 
+        -- Populate status_raw for ~50% of rows (even i), leave NULL for odd i
+        IF i % 2 = 0 THEN
+          status_raw_val := jsonb_build_object(
+            'conditions', jsonb_build_array(
+              jsonb_build_object(
+                'type',               'Ready',
+                'status',             'True',
+                'lastTransitionTime', to_char(now() - (i || ' minutes')::INTERVAL, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                'reason',             'Available',
+                'message',            'Resource is ready'
+              )
+            ),
+            'observedGeneration', i
+          );
+        ELSE
+          status_raw_val := NULL;
+        END IF;
+
         INSERT INTO krateo_resources
           (updated_at, cluster_name, uid, global_uid, namespace,
            resource_group, resource_version, resource_kind, resource_plural,
-           resource_name, raw)
+           resource_name, raw, status_raw)
         VALUES
           (now() - (i || ' minutes')::INTERVAL,
            c, uid_val, c || ':' || uid_val, ns,
            'widgets.templates.krateo.io', 'v1beta1', 'Panel', 'panels',
-           name_val, raw_val);
+           name_val, raw_val, status_raw_val);
 
           i := i + 1;
         END LOOP;

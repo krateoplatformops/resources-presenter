@@ -152,8 +152,7 @@ config:
 
   # Extra query parameters appended to the PostgreSQL connection string.
   # pool_min_conns: pre-warm connections at startup to avoid cold-start latency spikes.
-  # pool_max_conns: headroom for burst traffic without exhausting PostgreSQL.
-  DB_PARAMS: "sslmode=disable&connect_timeout=5&pool_min_conns=4&pool_max_conns=10"
+  DB_PARAMS: "sslmode=disable&connect_timeout=5&pool_min_conns=4"
 
   # Database username (loaded from secret)
   # This value can be used for development/testing

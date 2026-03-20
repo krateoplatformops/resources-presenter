@@ -49,6 +49,7 @@ All filters are optional (except `group`) and combined with `AND`.
 | `labels` | JSON object | JSONB containment on `metadata.labels` (`@>`) |
 | `since` | RFC3339 | Resources with `updated_at >= since` |
 | `raw` | boolean | Include full Kubernetes object (default: `false`) |
+| `status_raw` | boolean | Include Kubernetes status subtree (default: `false`) |
 | `limit` | integer | Page size (default: `100`). Use `-1` for unlimited (returns all results, no pagination). |
 | `cursor` | base64 | Opaque keyset cursor from previous response |
 
@@ -94,6 +95,7 @@ GET uses query parameters. POST uses the same fields as a JSON body (with `label
 - `global_uid` is always present: composite key in `cluster_name:uid` format, uniquely identifies a resource across clusters
 - `composition_id` appears only when set (non-null)
 - `raw` appears only when `raw=true` is requested
+- `status_raw` appears only when `status_raw=true` is requested (list); omitted when the DB value is NULL
 - `cursor` is absent on the last page or when results fit in a single page
 
 #### Namespace Handling
@@ -125,6 +127,7 @@ This endpoint does **not** support any of the list filters (`group`, `version`, 
 | `raw` | boolean | `true` | Include the full Kubernetes object. Set `?raw=false` to exclude. |
 
 Note: `raw` defaults to `true` on the detail endpoint (opposite of the list endpoint where it defaults to `false`).
+`status_raw` is always included on the detail endpoint when present in the database (omitted when NULL).
 
 #### Detail response
 
@@ -146,13 +149,15 @@ Same structure as the list endpoint, with `count: 1` and a single item in the `i
       "cluster_name": "prod-eu",
       "created_at": "2026-03-01T10:00:00Z",
       "updated_at": "2026-03-06T14:30:00Z",
-      "raw": { "..." }
+      "raw": { "..." },
+      "status_raw": { "..." }
     }
   ]
 }
 ```
 
 No `cursor` field: there is no pagination on the detail endpoint.
+`status_raw` is included by default when present; omitted when NULL in the database.
 
 ---
 

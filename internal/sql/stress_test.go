@@ -12,7 +12,6 @@ import (
 )
 
 // TestListResources_MaxLimit verifies behavior at the maximum allowed limit (5000 rows).
-// Currently, the maxLimit of 5000 is not enforced.
 func TestListResources_MaxLimit(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -254,7 +253,7 @@ func TestBuildListQuery_AllFilterCombinations(t *testing.T) {
 		p := deploymentParams("default", 50)
 
 		var names []string
-		expectedArgs := 4 // group + version + IN(resource, namespace) are always present
+		expectedArgs := 5 // group + version + IN(group, resource, namespace) are always present
 		for i, f := range filters {
 			if mask&(1<<i) != 0 {
 				f.apply(&p)
