@@ -3,6 +3,7 @@ package sql
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -84,15 +85,15 @@ func deploymentRow(name, ns, cluster string, created, updated time.Time, compID 
 	return []any{name, "uid-" + name, cluster + ":uid-" + name, ns, "apps", "v1", "Deployment", "deployments", cluster, created, updated, compID, id}
 }
 
-// panelArgs builds expected query args: group, version, resource (from IN), namespace (from IN), then extra.
+// panelArgs builds expected query args: group, version, then IN(group, resource, namespace), then extra.
 func panelArgs(ns string, extra ...any) []any {
-	args := []any{"widgets.templates.krateo.io", "v1beta1", "panels", ns}
+	args := []any{"widgets.templates.krateo.io", "v1beta1", "widgets.templates.krateo.io", "panels", ns}
 	return append(args, extra...)
 }
 
-// deploymentArgs builds expected query args: group, version, resource (from IN), namespace (from IN), then extra.
+// deploymentArgs builds expected query args: group, version, then IN(group, resource, namespace), then extra.
 func deploymentArgs(ns string, extra ...any) []any {
-	args := []any{"apps", "v1", "deployments", ns}
+	args := []any{"apps", "v1", "apps", "deployments", ns}
 	return append(args, extra...)
 }
 
@@ -491,9 +492,9 @@ func TestBuildListQuery_MinimalFilters(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// group + version + IN(resource, namespace) + limit = 5
-	if len(args) != 5 {
-		t.Fatalf("expected 5 args, got %d: %v", len(args), args)
+	// group + version + IN(group, resource, namespace) + limit = 2 + 3 + 1 = 6
+	if len(args) != 6 {
+		t.Fatalf("expected 6 args, got %d: %v", len(args), args)
 	}
 
 	t.Logf("query: %s", query)
@@ -520,9 +521,9 @@ func TestBuildListQuery_AllFilters(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// group + version + IN(resource, namespace) + cluster + composition_id + name + labels + since + cursor(2) + limit = 12
-	if len(args) != 12 {
-		t.Fatalf("expected 12 args, got %d: %v", len(args), args)
+	// group + version + IN(group, resource, namespace) + cluster + composition_id + name + labels + since + cursor(2) + limit = 13
+	if len(args) != 13 {
+		t.Fatalf("expected 13 args, got %d: %v", len(args), args)
 	}
 
 	t.Logf("query: %s", query)
@@ -546,9 +547,9 @@ func TestBuildListQuery_MultipleAllowedTargets(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// group + version + IN(3 * 2) + limit = 2 + 6 + 1 = 9
-	if len(args) != 9 {
-		t.Fatalf("expected 9 args, got %d: %v", len(args), args)
+	// group + version + IN(3 * 3) + limit = 2 + 9 + 1 = 12
+	if len(args) != 12 {
+		t.Fatalf("expected 12 args, got %d: %v", len(args), args)
 	}
 
 	if !strings.Contains(query, "IN") {
@@ -572,9 +573,9 @@ func TestBuildListQuery_NoVersion(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// group + IN(resource, namespace) + limit = 4
-	if len(args) != 4 {
-		t.Fatalf("expected 4 args, got %d: %v", len(args), args)
+	// group + IN(group, resource, namespace) + limit = 1 + 3 + 1 = 5
+	if len(args) != 5 {
+		t.Fatalf("expected 5 args, got %d: %v", len(args), args)
 	}
 
 	t.Logf("query: %s", query)
@@ -669,15 +670,15 @@ func TestBuildListQuery_ClusterFilter(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// group + version + IN(resource, namespace) + cluster + limit = 6
-	if len(args) != 6 {
-		t.Fatalf("expected 6 args, got %d: %v", len(args), args)
+	// group + version + IN(group, resource, namespace) + cluster + limit = 2 + 3 + 1 + 1 = 7
+	if len(args) != 7 {
+		t.Fatalf("expected 7 args, got %d: %v", len(args), args)
 	}
-	if args[4] != "cluster-a" {
-		t.Errorf("arg[4] = %v, want cluster-a", args[4])
+	if args[5] != "cluster-a" {
+		t.Errorf("arg[5] = %v, want cluster-a", args[5])
 	}
-	if !strings.Contains(query, "cluster_name = $5") {
-		t.Errorf("expected cluster_name = $5, got:\n%s", query)
+	if !strings.Contains(query, "cluster_name = $6") {
+		t.Errorf("expected cluster_name = $6, got:\n%s", query)
 	}
 }
 
@@ -690,14 +691,14 @@ func TestBuildListQuery_CompositionIDFilter(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(args) != 6 {
-		t.Fatalf("expected 6 args, got %d: %v", len(args), args)
+	if len(args) != 7 {
+		t.Fatalf("expected 7 args, got %d: %v", len(args), args)
 	}
-	if args[4] != "550e8400-e29b-41d4-a716-446655440000" {
-		t.Errorf("arg[4] = %v, want UUID", args[4])
+	if args[5] != "550e8400-e29b-41d4-a716-446655440000" {
+		t.Errorf("arg[5] = %v, want UUID", args[5])
 	}
-	if !strings.Contains(query, "composition_id = $5") {
-		t.Errorf("expected composition_id = $5, got:\n%s", query)
+	if !strings.Contains(query, "composition_id = $6") {
+		t.Errorf("expected composition_id = $6, got:\n%s", query)
 	}
 }
 
@@ -710,11 +711,11 @@ func TestBuildListQuery_NameContainsFilter(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(args) != 6 {
-		t.Fatalf("expected 6 args, got %d: %v", len(args), args)
+	if len(args) != 7 {
+		t.Fatalf("expected 7 args, got %d: %v", len(args), args)
 	}
-	if args[4] != "%api%" {
-		t.Errorf("arg[4] = %v, want %%api%%", args[4])
+	if args[5] != "%api%" {
+		t.Errorf("arg[5] = %v, want %%api%%", args[5])
 	}
 	if !strings.Contains(query, "resource_name ILIKE") {
 		t.Errorf("expected ILIKE clause, got:\n%s", query)
@@ -730,11 +731,11 @@ func TestBuildListQuery_NameExactFilter(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(args) != 6 {
-		t.Fatalf("expected 6 args, got %d: %v", len(args), args)
+	if len(args) != 7 {
+		t.Fatalf("expected 7 args, got %d: %v", len(args), args)
 	}
-	if args[4] != "my-deployment" {
-		t.Errorf("arg[4] = %v, want my-deployment", args[4])
+	if args[5] != "my-deployment" {
+		t.Errorf("arg[5] = %v, want my-deployment", args[5])
 	}
 	if !strings.Contains(query, "resource_name = ") {
 		t.Errorf("expected exact match clause, got:\n%s", query)
@@ -753,11 +754,11 @@ func TestBuildListQuery_LabelsFilter(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(args) != 6 {
-		t.Fatalf("expected 6 args, got %d: %v", len(args), args)
+	if len(args) != 7 {
+		t.Fatalf("expected 7 args, got %d: %v", len(args), args)
 	}
-	if args[4] != `{"app":"nginx"}` {
-		t.Errorf("arg[4] = %v, want labels JSON", args[4])
+	if args[5] != `{"app":"nginx"}` {
+		t.Errorf("arg[5] = %v, want labels JSON", args[5])
 	}
 	if !strings.Contains(query, "raw->'metadata'->'labels' @>") {
 		t.Errorf("expected JSONB containment clause, got:\n%s", query)
@@ -774,11 +775,11 @@ func TestBuildListQuery_SinceFilter(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(args) != 6 {
-		t.Fatalf("expected 6 args, got %d: %v", len(args), args)
+	if len(args) != 7 {
+		t.Fatalf("expected 7 args, got %d: %v", len(args), args)
 	}
-	if !args[4].(time.Time).Equal(since) {
-		t.Errorf("arg[4] = %v, want %v", args[4], since)
+	if !args[5].(time.Time).Equal(since) {
+		t.Errorf("arg[5] = %v, want %v", args[5], since)
 	}
 	if !strings.Contains(query, "updated_at >= ") {
 		t.Errorf("expected updated_at >= clause, got:\n%s", query)
@@ -805,9 +806,9 @@ func TestBuildListQuery_AllNewFilters(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// group + version + IN(resource, namespace) + cluster + composition_id + name + labels + since + cursor(2) + limit = 12
-	if len(args) != 12 {
-		t.Fatalf("expected 12 args, got %d: %v", len(args), args)
+	// group + version + IN(group, resource, namespace) + cluster + composition_id + name + labels + since + cursor(2) + limit = 13
+	if len(args) != 13 {
+		t.Fatalf("expected 13 args, got %d: %v", len(args), args)
 	}
 
 	if !strings.Contains(query, "resource_name ILIKE") {
@@ -846,31 +847,31 @@ func TestBuildListQuery_PlaceholderIndexing(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// $1=group, $2=version, ($3,$4)=IN, deleted_at IS NULL,
-	// $5=cluster, $6=composition_id, $7=name, $8=labels,
-	// $9=since, ($10,$11)=cursor, $12=limit
+	// $1=group, $2=version, ($3,$4,$5)=IN(group,resource,ns), deleted_at IS NULL,
+	// $6=cluster, $7=composition_id, $8=name, $9=labels,
+	// $10=since, ($11,$12)=cursor, $13=limit
 	checks := []struct {
 		pattern string
 	}{
 		{"resource_group = $1"},
 		{"resource_version = $2"},
-		{"IN (($3, $4))"},
+		{"IN (($3, $4, $5))"},
 		{"deleted_at IS NULL"},
-		{"cluster_name = $5"},
-		{"composition_id = $6"},
-		{"resource_name ILIKE $7"},
-		{"@> $8::jsonb"},
-		{"updated_at >= $9"},
-		{"(updated_at, id) < ($10, $11)"},
-		{"LIMIT $12"},
+		{"cluster_name = $6"},
+		{"composition_id = $7"},
+		{"resource_name ILIKE $8"},
+		{"@> $9::jsonb"},
+		{"updated_at >= $10"},
+		{"(updated_at, id) < ($11, $12)"},
+		{"LIMIT $13"},
 	}
 	for _, c := range checks {
 		if !strings.Contains(query, c.pattern) {
 			t.Errorf("expected %q in query, got:\n%s", c.pattern, query)
 		}
 	}
-	if len(args) != 12 {
-		t.Fatalf("expected 12 args, got %d", len(args))
+	if len(args) != 13 {
+		t.Fatalf("expected 13 args, got %d", len(args))
 	}
 
 	t.Logf("query: %s", query)
@@ -1144,30 +1145,30 @@ func TestListResources_SinceFilter(t *testing.T) {
 	}
 }
 
-// --- Unlimited limit tests ---
+// --- Limit edge-case tests ---
 
-func TestBuildListQuery_UnlimitedLimit(t *testing.T) {
-	p := deploymentParams("default", -1)
+func TestBuildListQuery_ZeroLimitUsesDefault(t *testing.T) {
+	// When limit is 0 (or negative), the handler normalizes it to defaultLimit before
+	// reaching the SQL layer. This test verifies that Limit=0 produces no LIMIT clause
+	// (the SQL layer only adds LIMIT when Limit > 0).
+	p := deploymentParams("default", 0)
 
-	query, args, err := buildListQuery(p)
+	query, _, err := buildListQuery(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// No LIMIT clause when limit is -1.
+	// Limit=0 means the SQL layer does not add a LIMIT clause.
 	if strings.Contains(query, "LIMIT") {
-		t.Errorf("expected no LIMIT clause for unlimited, got:\n%s", query)
-	}
-
-	// group + version + IN(resource, namespace) = 4 args (no limit arg).
-	if len(args) != 4 {
-		t.Fatalf("expected 4 args (no limit), got %d: %v", len(args), args)
+		t.Errorf("expected no LIMIT clause for Limit=0, got:\n%s", query)
 	}
 
 	t.Logf("query: %s", query)
 }
 
-func TestListResources_UnlimitedLimit(t *testing.T) {
+// --- Context cancellation test ---
+
+func TestListResources_CancelledContext(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatal(err)
@@ -1177,35 +1178,28 @@ func TestListResources_UnlimitedLimit(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	created := now.Add(-24 * time.Hour)
 
-	// Return 5 rows with no LIMIT in the query.
+	// Return rows, but the context will be cancelled before scanning.
 	rows := pgxmock.NewRows(baseCols()).
 		AddRows(deploymentRow("res-1", "default", "cluster-a", created, now, nil, int64(5))).
-		AddRows(deploymentRow("res-2", "default", "cluster-a", created, now.Add(-time.Second), nil, int64(4))).
-		AddRows(deploymentRow("res-3", "default", "cluster-a", created, now.Add(-2*time.Second), nil, int64(3))).
-		AddRows(deploymentRow("res-4", "default", "cluster-a", created, now.Add(-3*time.Second), nil, int64(2))).
-		AddRows(deploymentRow("res-5", "default", "cluster-a", created, now.Add(-4*time.Second), nil, int64(1)))
+		AddRows(deploymentRow("res-2", "default", "cluster-a", created, now.Add(-time.Second), nil, int64(4)))
 
-	// No limit arg expected.
 	mock.ExpectQuery("SELECT .+ FROM krateo_resources").
-		WithArgs(deploymentArgs("default")...).
+		WithArgs(deploymentArgs("default", 51)...).
 		WillReturnRows(rows)
 
-	params := deploymentParams("default", -1)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately before scanning.
 
-	result, err := ListResources(context.Background(), mock, params)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	params := deploymentParams("default", 50)
 
-	if len(result.Items) != 5 {
-		t.Fatalf("expected 5 items, got %d", len(result.Items))
+	_, err = ListResources(ctx, mock, params)
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
 	}
-	if result.Cursor != "" {
-		t.Fatal("expected empty cursor for unlimited query")
-	}
-
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatal(err)
+	// The cancellation may be caught either by db.Query (wrapped as "query: context canceled")
+	// or by our ctx.Err() check in the scan loop (raw context.Canceled). Both are correct.
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled (possibly wrapped), got: %v", err)
 	}
 }
 

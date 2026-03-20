@@ -41,7 +41,7 @@ type ListParams struct {
 	Limit           int
 	Cursor          EncodedCursor
 
-	// AllowedTargets restricts the query to only these (resource, namespace) pairs.
+	// AllowedTargets restricts the query to only these (group, resource, namespace) triples.
 	// When set, it replaces the individual ResourcePlural and Namespace filters.
 	// Populated by the handler after discovery and RBAC filtering.
 	AllowedTargets []ResourceTarget
@@ -145,13 +145,15 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 
 	// Pre-allocate to avoid repeated growing for large result sets.
 	initialCap := p.Limit + 1
-	if p.Limit <= 0 {
-		initialCap = 256 // reasonable default for unlimited queries
-	}
 	items := make([]ResourceItem, 0, initialCap)
 	cursors := make([]rowCursor, 0, initialCap)
 
 	for rows.Next() {
+		// Stop scanning promptly when the request is cancelled (client disconnect, timeout).
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		var (
 			resourceName    string
 			uid             string
@@ -217,8 +219,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 
 	result := &ListResult{}
 
-	// Pagination: only applies when a finite limit is set.
-	// When Limit == -1 (unlimited), all rows are returned with no cursor.
+	// Pagination: trim to requested limit and compute next-page cursor.
 	if p.Limit > 0 {
 		hasNextPage := len(items) > p.Limit
 		if hasNextPage {
@@ -259,16 +260,18 @@ func buildListQuery(p ListParams) (string, []any, error) {
 		b.Where("resource_version = ?", p.ResourceVersion)
 	}
 
-	// Restrict to RBAC-allowed (resource_plural, namespace) pairs.
+	// Restrict to RBAC-allowed (resource_group, resource_plural, namespace) triples.
 	// AllowedTargets must be populated by the handler after discovery + RBAC filtering.
+	// The group column is required to distinguish resources with the same plural name
+	// but different API groups (e.g. github:repoes vs gitlab:repoes).
 	if len(p.AllowedTargets) > 0 {
 		parts := make([]string, len(p.AllowedTargets))
-		args := make([]any, 0, len(p.AllowedTargets)*2)
+		args := make([]any, 0, len(p.AllowedTargets)*3)
 		for i, t := range p.AllowedTargets {
-			parts[i] = "(?, ?)"
-			args = append(args, t.Resource, t.Namespace)
+			parts[i] = "(?, ?, ?)"
+			args = append(args, t.Group, t.Resource, t.Namespace)
 		}
-		b.Where(fmt.Sprintf("(resource_plural, namespace) IN (%s)", strings.Join(parts, ", ")), args...)
+		b.Where(fmt.Sprintf("(resource_group, resource_plural, namespace) IN (%s)", strings.Join(parts, ", ")), args...)
 	}
 
 	if p.Cluster != "" {
@@ -306,7 +309,7 @@ func buildListQuery(p ListParams) (string, []any, error) {
 
 	b.OrderBy("updated_at DESC, id DESC")
 
-	// Fetch limit+1 to detect next page; skip when unlimited (Limit == -1).
+	// Fetch limit+1 to detect whether a next page exists.
 	if p.Limit > 0 {
 		b.Limit(p.Limit + 1)
 	}
@@ -329,7 +332,7 @@ func buildListQuery(p ListParams) (string, []any, error) {
 // It returns a ListResult with count 0 or 1 for response format consistency.
 // When includeRaw is true (the default for the detail endpoint), the full raw
 // Kubernetes object is included in the response.
-// status_raw is always selected for the detail endpoint (single row, negligible cost);
+// status_raw is always selected for the detail endpoint;
 // NULL values are omitted from JSON via omitempty.
 func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRaw bool) (*ListResult, error) {
 	cols := "resource_name, uid, global_uid, namespace, resource_group, resource_version, resource_kind, resource_plural, cluster_name, created_at, updated_at, composition_id, id"

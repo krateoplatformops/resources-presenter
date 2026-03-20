@@ -901,8 +901,23 @@ func TestParseRequest(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
-			name:       "limit=-1 means unlimited",
+			name:       "limit=-1 returns 400",
 			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&limit=-1",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "limit=0 returns 400",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&limit=0",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "limit exceeding max returns 400",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&limit=5001",
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "limit at max is accepted",
+			url:        "/resources?group=apps&version=v1&resource=deployments&namespace=default&limit=5000",
 			wantGroup:  "apps",
 			wantPlural: "deployments",
 		},
@@ -990,10 +1005,10 @@ func TestParseRequest(t *testing.T) {
 					t.Fatalf("expected Namespace=default, got %q", params.Namespace)
 				}
 			}
-			// Verify limit=-1 is unlimited.
-			if tt.name == "limit=-1 means unlimited" {
-				if params.Limit != -1 {
-					t.Fatalf("expected Limit=-1, got %d", params.Limit)
+			// Verify limit at max is accepted.
+			if tt.name == "limit at max is accepted" {
+				if params.Limit != maxLimit {
+					t.Fatalf("expected Limit=%d, got %d", maxLimit, params.Limit)
 				}
 			}
 			// Verify limit=null is treated as default.
@@ -1083,13 +1098,25 @@ func TestParseListParamsJSON_OK(t *testing.T) {
 }
 
 func TestParseListParamsJSON_DefaultLimit(t *testing.T) {
-	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":0}`))
+	// When limit is omitted, it defaults to defaultLimit.
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default"}`))
 	got, err := parseListParamsJSON(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.Limit != defaultLimit {
 		t.Fatalf("expected default limit %d, got %d", defaultLimit, got.Limit)
+	}
+}
+
+func TestParseListParamsJSON_ZeroLimitReturnsError(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":0}`))
+	_, err := parseListParamsJSON(req)
+	if err == nil {
+		t.Fatal("expected error for limit=0, got nil")
+	}
+	if !strings.Contains(err.Error(), "limit must be a positive integer") {
+		t.Fatalf("expected 'limit must be a positive integer' error, got: %v", err)
 	}
 }
 
@@ -1249,16 +1276,38 @@ func TestParseListParamsJSON_StatusRawDefault(t *testing.T) {
 	}
 }
 
-// --- Unlimited limit tests (POST JSON) ---
+// --- Limit enforcement tests (POST JSON) ---
 
-func TestParseListParamsJSON_UnlimitedLimit(t *testing.T) {
+func TestParseListParamsJSON_NegativeLimitReturnsError(t *testing.T) {
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":-1}`))
+	_, err := parseListParamsJSON(req)
+	if err == nil {
+		t.Fatal("expected error for limit=-1, got nil")
+	}
+	if !strings.Contains(err.Error(), "limit must be a positive integer") {
+		t.Fatalf("expected 'limit must be a positive integer' error, got: %v", err)
+	}
+}
+
+func TestParseListParamsJSON_ExceedsMaxLimit(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":5001}`))
+	_, err := parseListParamsJSON(req)
+	if err == nil {
+		t.Fatal("expected error for limit > maxLimit, got nil")
+	}
+	if !strings.Contains(err.Error(), "limit exceeds maximum") {
+		t.Fatalf("expected 'limit exceeds maximum' error, got: %v", err)
+	}
+}
+
+func TestParseListParamsJSON_AtMaxLimit(t *testing.T) {
+	req := httptest.NewRequest("POST", "/resources", strings.NewReader(`{"group":"apps","version":"v1","resource":"deployments","namespace":"default","limit":5000}`))
 	got, err := parseListParamsJSON(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.Limit != -1 {
-		t.Fatalf("expected limit=-1, got %d", got.Limit)
+	if got.Limit != 5000 {
+		t.Fatalf("expected limit=5000, got %d", got.Limit)
 	}
 }
 

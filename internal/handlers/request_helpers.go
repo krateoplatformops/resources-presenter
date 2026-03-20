@@ -160,11 +160,12 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 	limit := defaultLimit
 	if payload.Limit != nil {
 		limit = *payload.Limit
-	}
-	if limit == -1 {
-		// unlimited, keep -1
-	} else if limit <= 0 {
-		limit = defaultLimit
+		if limit <= 0 {
+			return sql.ListParams{}, fmt.Errorf("limit must be a positive integer (got %d)", limit)
+		}
+		if limit > maxLimit {
+			return sql.ListParams{}, fmt.Errorf("limit exceeds maximum allowed (%d)", maxLimit)
+		}
 	}
 
 	var labels string
@@ -211,19 +212,18 @@ func parseListParamsJSON(r *http.Request) (sql.ListParams, error) {
 }
 
 func parseLimit(v string) (int, error) {
-	limit := defaultLimit
-	if v != "" && v != "null" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return 0, fmt.Errorf("invalid limit: %w", err)
-		}
-		if n == -1 {
-			return -1, nil // unlimited
-		}
-		limit = n
+	if v == "" || v == "null" {
+		return defaultLimit, nil
 	}
-	if limit <= 0 {
-		limit = defaultLimit
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid limit: %w", err)
 	}
-	return limit, nil
+	if n <= 0 {
+		return 0, fmt.Errorf("limit must be a positive integer (got %d)", n)
+	}
+	if n > maxLimit {
+		return 0, fmt.Errorf("limit exceeds maximum allowed (%d)", maxLimit)
+	}
+	return n, nil
 }
