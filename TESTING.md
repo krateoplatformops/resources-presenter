@@ -336,14 +336,17 @@ kind delete cluster --name krateo-e2e
 
 ```sh
 # Full setup (copy-paste block)
+kind delete cluster --name krateo-e2e
 kind create cluster --name krateo-e2e
+kubectl cluster-info --context kind-krateo-e2e
+kubectl create ns krateo-system
 kubectl apply -f deploy/test-postgres.yaml
 kubectl wait --for=condition=ready pod -l app=postgres -n krateo-system --timeout=120s
 docker build -t resources-presenter:dev .
 kind load docker-image resources-presenter:dev --name krateo-e2e
 helm template resources-presenter ./chart -n krateo-system -f ./chart/values.e2e.yaml | kubectl apply -f -
 kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=resources-presenter -n krateo-system --timeout=120s
-TOKEN=$(krateoctl add-user -n krateo-system -k "e2e-test-sign-key" -g devs -d 24h e2euser)
+export TOKEN=$(krateoctl add-user -n krateo-system -k "e2e-test-sign-key" -g devs -d 24h e2euser)
 kubectl apply -f deploy/test-user-rbac.yaml
 kubectl port-forward svc/resources-presenter 8080:8080 -n krateo-system &
 
