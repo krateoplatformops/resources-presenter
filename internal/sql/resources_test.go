@@ -42,6 +42,16 @@ func detailColsNoRaw() []string {
 	return append(baseCols(), "status_raw")
 }
 
+// detailColsNoStatusRaw returns the column names for GetByGlobalUID with includeRaw=true, includeStatusRaw=false.
+func detailColsNoStatusRaw() []string {
+	return rawCols()
+}
+
+// detailColsMinimal returns the column names for GetByGlobalUID with includeRaw=false, includeStatusRaw=false.
+func detailColsMinimal() []string {
+	return baseCols()
+}
+
 // discoverCols returns the column names for DiscoverTargets queries.
 func discoverCols() []string {
 	return []string{"resource_group", "resource_plural", "namespace"}
@@ -1224,7 +1234,7 @@ func TestGetByGlobalUID_Found(t *testing.T) {
 		WithArgs("cluster-a:uid-nginx").
 		WillReturnRows(rows)
 
-	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true)
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1263,7 +1273,7 @@ func TestGetByGlobalUID_NotFound(t *testing.T) {
 		WithArgs("cluster-x:uid-missing").
 		WillReturnRows(pgxmock.NewRows(detailCols()))
 
-	result, err := GetByGlobalUID(context.Background(), mock, "cluster-x:uid-missing", true)
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-x:uid-missing", true, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1298,7 +1308,7 @@ func TestGetByGlobalUID_WithoutRaw(t *testing.T) {
 		WithArgs("cluster-a:uid-nginx").
 		WillReturnRows(rows)
 
-	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", false)
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", false, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1327,7 +1337,7 @@ func TestGetByGlobalUID_QueryError(t *testing.T) {
 		WillReturnError(fmt.Errorf("connection refused"))
 
 	// includeRaw=true, but error happens before scanning so columns don't matter.
-	_, err = GetByGlobalUID(context.Background(), mock, "cluster-a:uid-fail", true)
+	_, err = GetByGlobalUID(context.Background(), mock, "cluster-a:uid-fail", true, true)
 	if err == nil {
 		t.Fatal("expected error for query failure")
 	}
@@ -1575,7 +1585,7 @@ func TestGetByGlobalUID_StatusRawPopulated(t *testing.T) {
 		WithArgs("cluster-a:uid-nginx").
 		WillReturnRows(rows)
 
-	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true)
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1619,7 +1629,7 @@ func TestGetByGlobalUID_StatusRawNull(t *testing.T) {
 		WithArgs("cluster-a:uid-nginx").
 		WillReturnRows(rows)
 
-	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true)
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1661,7 +1671,7 @@ func TestGetByGlobalUID_NoRaw_StatusRawStillIncluded(t *testing.T) {
 		WithArgs("cluster-a:uid-nginx").
 		WillReturnRows(rows)
 
-	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", false)
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", false, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1676,6 +1686,84 @@ func TestGetByGlobalUID_NoRaw_StatusRawStillIncluded(t *testing.T) {
 	}
 	if item.StatusRaw == nil {
 		t.Fatal("expected status_raw to be populated even when includeRaw=false")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetByGlobalUID_StatusRawDisabled(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+
+	row := append(deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5)), []byte(`{"kind":"Deployment"}`))
+	rows := pgxmock.NewRows(detailColsNoStatusRaw()).AddRows(row)
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
+		WithArgs("cluster-a:uid-nginx").
+		WillReturnRows(rows)
+
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count=1, got %d", result.Count)
+	}
+
+	item := result.Items[0]
+	if item.Raw == nil {
+		t.Fatal("expected raw to be populated")
+	}
+	if item.StatusRaw != nil {
+		t.Error("expected nil status_raw when includeStatusRaw=false")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetByGlobalUID_BothDisabled(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	created := now.Add(-24 * time.Hour)
+
+	row := deploymentRow("nginx", "prod", "cluster-a", created, now, nil, int64(5))
+	rows := pgxmock.NewRows(detailColsMinimal()).AddRows(row)
+
+	mock.ExpectQuery("SELECT .+ FROM krateo_resources WHERE global_uid").
+		WithArgs("cluster-a:uid-nginx").
+		WillReturnRows(rows)
+
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", false, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.Count != 1 {
+		t.Fatalf("expected count=1, got %d", result.Count)
+	}
+
+	item := result.Items[0]
+	if item.Raw != nil {
+		t.Error("expected nil raw when includeRaw=false")
+	}
+	if item.StatusRaw != nil {
+		t.Error("expected nil status_raw when includeStatusRaw=false")
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -1704,7 +1792,7 @@ func TestGetByGlobalUID_DuplicateDetection(t *testing.T) {
 		WithArgs("cluster-a:uid-nginx").
 		WillReturnRows(rows)
 
-	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true)
+	result, err := GetByGlobalUID(context.Background(), mock, "cluster-a:uid-nginx", true, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

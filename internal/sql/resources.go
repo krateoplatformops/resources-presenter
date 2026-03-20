@@ -332,14 +332,16 @@ func buildListQuery(p ListParams) (string, []any, error) {
 // It returns a ListResult with count 0 or 1 for response format consistency.
 // When includeRaw is true (the default for the detail endpoint), the full raw
 // Kubernetes object is included in the response.
-// status_raw is always selected for the detail endpoint;
-// NULL values are omitted from JSON via omitempty.
-func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRaw bool) (*ListResult, error) {
+// When includeStatusRaw is true (the default), the status_raw JSONB column is
+// included; callers can pass false to omit it.
+func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRaw, includeStatusRaw bool) (*ListResult, error) {
 	cols := "resource_name, uid, global_uid, namespace, resource_group, resource_version, resource_kind, resource_plural, cluster_name, created_at, updated_at, composition_id, id"
 	if includeRaw {
 		cols += ", raw"
 	}
-	cols += ", status_raw"
+	if includeStatusRaw {
+		cols += ", status_raw"
+	}
 
 	query := fmt.Sprintf("SELECT %s FROM krateo_resources WHERE global_uid = $1 AND deleted_at IS NULL LIMIT 2", cols)
 
@@ -379,7 +381,9 @@ func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRa
 		if includeRaw {
 			scanDest = append(scanDest, &rawJSON)
 		}
-		scanDest = append(scanDest, &statusRawJSON)
+		if includeStatusRaw {
+			scanDest = append(scanDest, &statusRawJSON)
+		}
 
 		if err := rows.Scan(scanDest...); err != nil {
 			return nil, fmt.Errorf("get_by_global_uid scan: %w", err)
@@ -402,7 +406,7 @@ func GetByGlobalUID(ctx context.Context, db Querier, globalUID string, includeRa
 		if includeRaw && rawJSON != nil {
 			item.Raw = json.RawMessage(rawJSON)
 		}
-		if statusRawJSON != nil {
+		if includeStatusRaw && statusRawJSON != nil {
 			item.StatusRaw = json.RawMessage(statusRawJSON)
 		}
 

@@ -173,7 +173,8 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 // response format as the list endpoint (count + items array).
 //
 // Query parameters:
-//   - raw → include full Kubernetes object (default: true)
+//   - raw        → include full Kubernetes object (default: true)
+//   - status_raw → include status_raw JSONB column (default: true)
 //
 // The handler flow:
 //  1. Parse and validate path parameter (global_uid)
@@ -208,8 +209,9 @@ func ResourceDetailHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) 
 			return
 		}
 
-		// raw defaults to true for the detail endpoint.
+		// raw and status_raw default to true for the detail endpoint.
 		includeRaw := r.URL.Query().Get("raw") != "false"
+		includeStatusRaw := r.URL.Query().Get("status_raw") != "false"
 
 		hl.addPhase("1_parse", time.Since(parseStart))
 		hl.Extra = []slog.Attr{
@@ -222,7 +224,7 @@ func ResourceDetailHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) 
 		queryCtx, queryCancel := context.WithTimeout(r.Context(), queryTimeout)
 		defer queryCancel()
 
-		result, err := sql.GetByGlobalUID(queryCtx, db, globalUID, includeRaw)
+		result, err := sql.GetByGlobalUID(queryCtx, db, globalUID, includeRaw, includeStatusRaw)
 		hl.addPhase("2_query", time.Since(queryStart))
 		if err != nil {
 			log.Debug("DB query error", slog.Any("err", err), slog.String("global_uid", globalUID), slog.String("trace_id", traceID))
