@@ -38,6 +38,7 @@ type ListParams struct {
 	Since           *time.Time
 	Raw             bool
 	StatusRaw       bool // include status_raw JSONB column
+	SortBy          SortBy
 	Limit           int
 	Cursor          EncodedCursor
 
@@ -70,12 +71,6 @@ type ListResult struct {
 	Count  int            `json:"count"`
 	Items  []ResourceItem `json:"items"`
 	Cursor EncodedCursor  `json:"cursor,omitempty"`
-}
-
-// rowCursor holds the pagination-relevant fields for each scanned row.
-type rowCursor struct {
-	updatedAt time.Time
-	id        int64
 }
 
 // DiscoverTargets queries krateo_resources for distinct (group, resource, namespace)
@@ -211,12 +206,24 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 		}
 
 		items = append(items, item)
-		cursors = append(cursors, rowCursor{updatedAt: updatedAt, id: id})
+		cursors = append(cursors, rowCursor{
+			id:            id,
+			updatedAt:     updatedAt,
+			createdAt:     createdAt,
+			globalUID:     globalUID,
+			compositionID: compositionID,
+			group:         resourceGroup,
+			version:       resourceVersion,
+			resource:      resourcePlural,
+			namespace:     namespace,
+			name:          resourceName,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
 	}
 
+	sortBy := normaliseSortBy(p.SortBy)
 	result := &ListResult{}
 
 	// Pagination: trim to requested limit and compute next-page cursor.
@@ -229,10 +236,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 
 		if hasNextPage && len(cursors) > 0 {
 			last := cursors[len(cursors)-1]
-			result.Cursor = EncodeCursor(&ResourcesCursor{
-				UpdatedAt: last.updatedAt,
-				ID:        last.id,
-			})
+			result.Cursor = EncodeCursor(buildCursor(sortBy, last))
 		}
 	}
 
@@ -298,16 +302,23 @@ func buildListQuery(p ListParams) (string, []any, error) {
 		b.Where("updated_at >= ?", *p.Since)
 	}
 
+	// Resolve sort order (default to SortByResource when unset).
+	sortBy := normaliseSortBy(p.SortBy)
+
 	// Keyset pagination cursor
 	cur, err := DecodeCursor(p.Cursor)
 	if err != nil {
 		return "", nil, err
 	}
+	if err := validateCursorSort(cur, sortBy); err != nil {
+		return "", nil, err
+	}
 	if cur != nil {
-		b.Where("(updated_at, id) < (?, ?)", cur.UpdatedAt, cur.ID)
+		cursorWhere, cursorArgs := cursorCondition(sortBy, cur)
+		b.Where(cursorWhere, cursorArgs...)
 	}
 
-	b.OrderBy("updated_at DESC, id DESC")
+	b.OrderBy(sortOrderSQL(sortBy))
 
 	// Fetch limit+1 to detect whether a next page exists.
 	if p.Limit > 0 {

@@ -14,7 +14,8 @@ import (
 
 func BenchmarkCursorEncode(b *testing.B) {
 	c := &ResourcesCursor{
-		UpdatedAt: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
+		SortBy:    SortByUpdatedAt,
+		UpdatedAt: timePtr(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)),
 		ID:        42,
 	}
 	b.ResetTimer()
@@ -25,7 +26,8 @@ func BenchmarkCursorEncode(b *testing.B) {
 
 func BenchmarkCursorDecode(b *testing.B) {
 	encoded := EncodeCursor(&ResourcesCursor{
-		UpdatedAt: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
+		SortBy:    SortByUpdatedAt,
+		UpdatedAt: timePtr(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)),
 		ID:        42,
 	})
 	b.ResetTimer()
@@ -36,7 +38,8 @@ func BenchmarkCursorDecode(b *testing.B) {
 
 func BenchmarkCursorRoundtrip(b *testing.B) {
 	c := &ResourcesCursor{
-		UpdatedAt: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
+		SortBy:    SortByUpdatedAt,
+		UpdatedAt: timePtr(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)),
 		ID:        42,
 	}
 	b.ResetTimer()
@@ -59,10 +62,12 @@ func BenchmarkBuildListQuery_Minimal(b *testing.B) {
 func BenchmarkBuildListQuery_AllFilters(b *testing.B) {
 	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	cursor := EncodeCursor(&ResourcesCursor{
-		UpdatedAt: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
+		SortBy:    SortByUpdatedAt,
+		UpdatedAt: timePtr(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)),
 		ID:        42,
 	})
 	p := deploymentParams("prod", 100)
+	p.SortBy = SortByUpdatedAt
 	p.Cluster = "cluster-a"
 	p.CompositionID = "550e8400-e29b-41d4-a716-446655440000"
 	p.NameContains = "api-service"

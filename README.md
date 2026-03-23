@@ -9,7 +9,8 @@ Read-only HTTP API for querying current Kubernetes resource state stored in Post
 Key features:
 - **GET and POST** query support with filter capabilities to get lists of resources matching criteria
 - **Single-resource detail** endpoint via `global_uid`
-- **Keyset pagination** (`updated_at DESC, id DESC`) for stable, efficient paging
+- **Configurable sorting** via `sort_by` parameter (`resource`, `created_at`, `updated_at`, `global_uid`, `composition_id`)
+- **Keyset pagination** for stable, efficient paging (cursor is sort-order-aware)
 - **Dynamic resource resolution** via `group` (required) plus optional `version` and `resource` filters: discovery-based, no static registry needed
 - **JSONB label filtering** via PostgreSQL containment (`@>`)
 - **Batch RBAC enforcement** via discovery → RBAC batch check → filtered query
@@ -49,8 +50,9 @@ All filters are optional (except `group`) and combined with `AND`.
 | `since` | RFC3339 | Resources with `updated_at >= since` |
 | `raw` | boolean | Include full Kubernetes object (default: `false`) |
 | `status_raw` | boolean | Include Kubernetes status subtree (default: `false`) |
+| `sort_by` | string | Sort order. One of: `resource` (default), `created_at`, `updated_at`, `global_uid`, `composition_id`. See [Sorting](#sorting). |
 | `limit` | integer | Page size (default: `100`). Minimum: `1`, Maximum: `5000`. |
-| `cursor` | base64 | Opaque keyset cursor from previous response |
+| `cursor` | base64 | Opaque keyset cursor from previous response. Cursor is sort-order-aware: a cursor from one `sort_by` cannot be reused with a different one. |
 
 GET uses query parameters. POST uses the same fields as a JSON body (with `labels` as a JSON object, not a string). Note: `kind` is not a query parameter: the `resource` (plural) field is used for filtering. Only `group` is required; all other fields are optional.
 

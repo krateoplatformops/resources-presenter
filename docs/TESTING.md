@@ -22,7 +22,7 @@ Integration tests use `testcontainers-go` to spin up a real PostgreSQL container
 **Requires:** Docker running.
 
 ```sh
-# Handler layer (pagination, filtering, RBAC mock, POST, validation, list + detail endpoints)
+# Handler layer (pagination, filtering, sorting, RBAC mock, POST, validation, list + detail endpoints)
 go test ./internal/handlers/ -v -cover
 
 # All tests (unit + integration)
@@ -65,6 +65,7 @@ kubectl create ns krateo-system
 Deploys an ephemeral Postgres pod with the schema and 20000 seed Panel resources pre-loaded via init scripts. No PVC: data is lost when the pod is deleted.
 ```sh
 kubectl apply -f deploy/test-postgres.yaml
+sleep 5
 kubectl wait --for=condition=ready pod -l app=postgres -n krateo-system --timeout=240s
 ```
 
@@ -78,7 +79,7 @@ Expected output: `20000`.
 
 ```sh
 kubectl exec -n krateo-system deploy/postgres -- \
-  psql -U krateo -d krateo -c "SELECT cluster_name, namespace, resource_group, resource_version, resource_kind, resource_plural, resource_name FROM krateo_resources LIMIT 20;"
+  psql -U krateo -d krateo -c "SELECT cluster_name, namespace, resource_group, resource_version, resource_kind, resource_plural, resource_name, composition_id FROM krateo_resources LIMIT 20;"
 ```
 
 Expected output: a sample of the seeded resources.
@@ -376,11 +377,11 @@ Benchmarks live in `internal/sql/bench_test.go` and measure the hot paths of the
 
 | Benchmark | What it measures |
 |---|---|
-| `BenchmarkCursorEncode` | Encoding a keyset cursor to base64 |
-| `BenchmarkCursorDecode` | Decoding a base64 cursor back to struct |
+| `BenchmarkCursorEncode` | Encoding a sort-aware keyset cursor to base64 |
+| `BenchmarkCursorDecode` | Decoding a base64 cursor back to sort-aware struct |
 | `BenchmarkCursorRoundtrip` | Full encode + decode cycle |
-| `BenchmarkBuildListQuery_Minimal` | SQL builder with required filters only (group, version, AllowedTargets IN clause) |
-| `BenchmarkBuildListQuery_AllFilters` | SQL builder with all 6 filters + cursor active |
+| `BenchmarkBuildListQuery_Minimal` | SQL builder with required filters only (group, version, AllowedTargets IN clause, default `resource` sort) |
+| `BenchmarkBuildListQuery_AllFilters` | SQL builder with all 6 filters + `updated_at` sort + cursor active |
 | `BenchmarkEscapeLIKE` | Escaping LIKE special characters |
 | `BenchmarkJSONMarshal_10/100/1000` | Serializing result sets of varying sizes |
 | `BenchmarkJSONMarshal_1000_WithRaw` | Serializing 1000 items including raw JSONB |
@@ -452,10 +453,10 @@ Stress tests live in `internal/sql/stress_test.go` and verify correctness under 
 | Test | What it verifies |
 |---|---|
 | `TestListResources_MaxLimit` | Correct behavior at max limit (5000 rows, no next page) |
-| `TestListResources_MaxLimitWithNextPage` | Cursor is correctly set when 5001 rows exist |
+| `TestListResources_MaxLimitWithNextPage` | Cursor is correctly set when 5001 rows exist (default `resource` sort) |
 | `TestListResources_RawLargePayload` | Handling of ~50KB raw JSONB objects |
 | `TestListResources_ConcurrentAccess` | 50 goroutines querying simultaneously (race safety) |
-| `TestBuildListQuery_AllFilterCombinations` | All 32 combinations of 5 optional filters |
+| `TestBuildListQuery_AllFilterCombinations` | All 32 combinations of 5 optional filters (with/without cursor) |
 | `TestEscapeLIKE` | LIKE special character escaping (`%`, `_`, `\`) |
 
 ### Running stress tests

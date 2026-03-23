@@ -70,7 +70,8 @@ All filters (except `group`) are optional and are combined with `AND`.
 | `raw` | boolean | If `true`, include the full `raw` JSONB field in the response. Default: `false`. |
 | `status_raw` | boolean | If `true`, include the `status_raw` JSONB field (Kubernetes status subtree). Default: `false`. |
 | `limit` | integer | Page size. Default: `100`. Minimum: `1`, Maximum: `5000`. |
-| `cursor` | base64 string | Keyset cursor for pagination (opaque token returned by previous response). |
+| `sort_by` | string | Sort order for results. One of: `resource` (default), `created_at`, `updated_at`, `global_uid`, `composition_id`. See [Sorting](#sorting-list-only). |
+| `cursor` | base64 string | Keyset cursor for pagination (opaque token returned by previous response). Sort-order-aware: a cursor from one `sort_by` cannot be reused with a different one. |
 
 If `since` is not valid RFC3339, `labels` is not valid JSON, or `composition_id` is not a valid UUID, the API returns a `400` error.
 If `cursor` is invalid base64/JSON, the API returns a `400` error.
@@ -96,6 +97,7 @@ Example body:
   "since": "2026-03-01T00:00:00Z",
   "raw": true,
   "status_raw": true,
+  "sort_by": "updated_at",
   "limit": 100,
   "cursor": "<cursor-from-previous-page>"
 }
@@ -109,6 +111,7 @@ Notes:
 - `limit` defaults to `100` when omitted or `<= 0`.
 - `raw` defaults to `false` when omitted.
 - `status_raw` defaults to `false` when omitted.
+- `sort_by` defaults to `resource` when omitted.
 
 ### List Response
 
@@ -283,13 +286,13 @@ curl --request POST "http://localhost:8080/resources" \
 
 ### Pagination (list only)
 
-Uses keyset pagination with fixed order: `updated_at DESC, id DESC`.
+Uses keyset pagination. The cursor encodes the sort-relevant columns of the last returned row and is opaque to clients (base64-encoded JSON).
 
 1. First call without `cursor`.
 2. Read `cursor` from response.
-3. Send it back in the next call.
+3. Send it back in the next call (with the **same `sort_by`**).
 
-The cursor is built from the last returned row (`updated_at`, `id`) and is opaque to clients (base64-encoded JSON).
+The cursor is sort-order-aware: it is only valid for the `sort_by` that produced it. Sending a cursor created with one `sort_by` to a request with a different `sort_by` returns `400`.
 
 When there are no more pages, the `cursor` field is absent in the response.
 
@@ -381,7 +384,74 @@ RBAC is enforced on every request.
 
 ### Sorting (list only)
 
-TODO
+Control the order of results with the `sort_by` parameter. The default is `resource` (lexicographic by group/version/resource/namespace/name).
+
+#### Sort values
+
+| Value | SQL ORDER BY | Direction | Description |
+| --- | --- | --- | --- |
+| `resource` (default) | `resource_group, resource_version, resource_plural, namespace, resource_name, id` | ASC | Lexicographic by fully-qualified resource identity |
+| `created_at` | `created_at, id` | DESC | Newest first by creation time |
+| `updated_at` | `updated_at, id` | DESC | Newest first by last update time |
+| `global_uid` | `global_uid, id` | ASC | Alphabetical by composite key (`cluster:uid`) |
+| `composition_id` | `composition_id, id` | ASC NULLS LAST | Alphabetical by composition UUID; resources without a `composition_id` appear last |
+
+Every sort order includes `id` as a tiebreaker to guarantee a deterministic, stable order even when the primary sort column has duplicate values.
+
+#### NULL handling
+
+`composition_id` is the only nullable sort column. NULLs sort **after** all non-NULL values (`NULLS LAST`). When paginating across the NULL boundary, the cursor tracks whether the last row had a NULL `composition_id` so pagination continues correctly.
+
+#### Invalid values
+
+An unrecognised `sort_by` value returns `400 Bad Request`.
+
+#### Examples
+
+```bash
+# Sort by most recently updated (default page size)
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "resource=deployments" \
+  --data-urlencode "sort_by=updated_at"
+
+# Sort by creation time with pagination
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "resource=deployments" \
+  --data-urlencode "sort_by=created_at" \
+  --data-urlencode "limit=50"
+
+# Sort by composition_id (NULLs last)
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=widgets.templates.krateo.io" \
+  --data-urlencode "version=v1beta1" \
+  --data-urlencode "resource=panels" \
+  --data-urlencode "sort_by=composition_id"
+
+# POST with sort_by
+curl --request POST "http://localhost:8080/resources" \
+  --header "Content-Type: application/json" \
+  --data '{
+    "group": "apps",
+    "version": "v1",
+    "resource": "deployments",
+    "sort_by": "global_uid",
+    "limit": 100
+  }'
+```
+
+#### Cursor and sort_by compatibility
+
+Cursors are bound to the `sort_by` that produced them. If you change `sort_by` between pages, the API returns `400`:
+
+```
+cursor was created with sort_by="updated_at" but request uses sort_by="created_at"; cursors are not reusable across sort orders
+```
+
+To change sort order, start a new pagination sequence (omit `cursor`).
 
 ---
 

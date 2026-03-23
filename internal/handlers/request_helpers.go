@@ -92,6 +92,7 @@ func parseListParams(r *http.Request) (sql.ListParams, error) {
 		Since:           since,
 		Raw:             q.Get("raw") == "true",
 		StatusRaw:       q.Get("status_raw") == "true",
+		SortBy:          sql.SortBy(q.Get("sort_by")),
 		Limit:           limit,
 		Cursor:          sql.EncodedCursor(q.Get("cursor")),
 	}
@@ -117,6 +118,7 @@ type resourcesJSONPayload struct {
 	Since         *time.Time     `json:"since"`
 	Raw           *bool          `json:"raw"`
 	StatusRaw     *bool          `json:"status_raw"`
+	SortBy        string         `json:"sort_by"`
 	Limit         *int           `json:"limit"`
 	Cursor        string         `json:"cursor"`
 }
@@ -186,6 +188,7 @@ func parseListParamsJSON(w http.ResponseWriter, r *http.Request) (sql.ListParams
 		Since:           payload.Since,
 		Raw:             derefBool(payload.Raw, false),
 		StatusRaw:       derefBool(payload.StatusRaw, false),
+		SortBy:          sql.SortBy(payload.SortBy),
 		Limit:           limit,
 		Cursor:          sql.EncodedCursor(payload.Cursor),
 	}

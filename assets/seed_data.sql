@@ -19,6 +19,8 @@ DECLARE
   uid_val TEXT;
   name_val TEXT;
   global_uid_val TEXT;
+  comp_id_val UUID;
+  comp_hash TEXT;
 
   raw_val JSONB;
   status_raw_val JSONB;
@@ -56,6 +58,22 @@ BEGIN
           uid_val := md5(c || '|' || ns || '|' || title || '|' || rep || '|' || ti);
 
           global_uid_val := c || ':' || uid_val;
+
+          -- deterministic composition_id: ~60% of rows get one,
+          -- ~40% stay NULL (for testing NULLS LAST sorting).
+          -- Resources sharing the same section+title belong to the same composition.
+          IF i % 5 != 0 THEN
+            comp_hash := md5('comp|' || sec || '|' || title);
+            comp_id_val := (
+              substr(comp_hash, 1, 8) || '-' ||
+              substr(comp_hash, 9, 4) || '-' ||
+              substr(comp_hash, 13, 4) || '-' ||
+              substr(comp_hash, 17, 4) || '-' ||
+              substr(comp_hash, 21, 12)
+            )::UUID;
+          ELSE
+            comp_id_val := NULL;
+          END IF;
 
           raw_val := jsonb_build_object(
             'apiVersion', 'widgets.templates.krateo.io/v1beta1',
@@ -117,7 +135,7 @@ BEGIN
           INSERT INTO krateo_resources
             (created_at, updated_at, cluster_name, uid, global_uid, namespace,
             resource_group, resource_version, resource_kind, resource_plural,
-            resource_name, raw, status_raw)
+            resource_name, composition_id, raw, status_raw)
           VALUES
             (
               base_ts,
@@ -131,13 +149,15 @@ BEGIN
               'Panel',
               'panels',
               name_val,
+              comp_id_val,
               raw_val,
               status_raw_val
             )
           ON CONFLICT (global_uid) DO UPDATE SET
-            updated_at = EXCLUDED.updated_at,
-            raw        = EXCLUDED.raw,
-            status_raw = EXCLUDED.status_raw;
+            updated_at     = EXCLUDED.updated_at,
+            composition_id = EXCLUDED.composition_id,
+            raw            = EXCLUDED.raw,
+            status_raw     = EXCLUDED.status_raw;
 
           -- increment krateo-system counter
           IF ns = 'krateo-system' THEN

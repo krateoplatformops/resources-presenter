@@ -93,14 +93,17 @@ func TestListResources_MaxLimitWithNextPage(t *testing.T) {
 		t.Fatal("expected non-empty cursor when more rows exist")
 	}
 
-	// Verify cursor points to the last returned item.
+	// Verify cursor points to the last returned item (default sort is SortByResource).
 	cur, err := DecodeCursor(result.Cursor)
 	if err != nil {
 		t.Fatalf("cursor decode error: %v", err)
 	}
+	if cur.SortBy != SortByResource {
+		t.Errorf("cursor SortBy=%q, want %q", cur.SortBy, SortByResource)
+	}
 	lastItem := result.Items[limit-1]
-	if !cur.UpdatedAt.Equal(lastItem.UpdatedAt) {
-		t.Errorf("cursor UpdatedAt=%v, last item UpdatedAt=%v", cur.UpdatedAt, lastItem.UpdatedAt)
+	if cur.Name != lastItem.Name {
+		t.Errorf("cursor Name=%q, last item Name=%q", cur.Name, lastItem.Name)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -227,10 +230,12 @@ func TestListResources_ConcurrentAccess(t *testing.T) {
 
 // TestBuildListQuery_AllFilterCombinations exhaustively tests that the builder
 // generates valid SQL for all 2^5 = 32 combinations of optional filters.
+// SortBy is fixed to SortByUpdatedAt for this test.
 func TestBuildListQuery_AllFilterCombinations(t *testing.T) {
 	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	cursor := EncodeCursor(&ResourcesCursor{
-		UpdatedAt: time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC),
+		SortBy:    SortByUpdatedAt,
+		UpdatedAt: timePtr(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)),
 		ID:        42,
 	})
 
@@ -265,8 +270,9 @@ func TestBuildListQuery_AllFilterCombinations(t *testing.T) {
 		// Add cursor for odd masks to test cursor interplay.
 		hasCursor := mask%3 == 0 && mask > 0
 		if hasCursor {
+			p.SortBy = SortByUpdatedAt
 			p.Cursor = cursor
-			expectedArgs += 2 // cursor adds 2 args
+			expectedArgs += 2 // cursor adds 2 args: updated_at and id (SortByUpdatedAt)
 			names = append(names, "cursor")
 		}
 
