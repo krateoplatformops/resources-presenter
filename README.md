@@ -50,7 +50,7 @@ All filters are optional (except `group`) and combined with `AND`.
 | `since` | RFC3339 | Resources with `updated_at >= since` |
 | `raw` | boolean | Include full Kubernetes object (default: `false`) |
 | `status_raw` | boolean | Include Kubernetes status subtree (default: `false`) |
-| `sort_by` | string | Sort order. One of: `resource` (default), `created_at`, `updated_at`, `global_uid`, `composition_id`. See [Sorting](#sorting). |
+| `sort_by` | string | Sort order. One of: `resource` (default), `created_at`, `updated_at`, `global_uid`, `composition_id`. |
 | `limit` | integer | Page size (default: `100`). Minimum: `1`, Maximum: `5000`. |
 | `cursor` | base64 | Opaque keyset cursor from previous response. Cursor is sort-order-aware: a cursor from one `sort_by` cannot be reused with a different one. |
 
