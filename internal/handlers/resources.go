@@ -15,7 +15,7 @@ import (
 
 const (
 	defaultLimit = 100
-	maxLimit     = 5000
+	maxLimit     = 1000
 	queryTimeout = 10 * time.Second
 )
 
@@ -220,7 +220,8 @@ func (h *resourceHandler) resourcesQuery(ctx context.Context, rc *requestCtx, pa
 func (h *resourceHandler) serializeResponse(rc *requestCtx, phaseLabel string, result *sql.ListResult) {
 	serStart := time.Now()
 
-	if _, err := writeJSON(rc.w, h.log, rc.traceID, result); err != nil {
+	data, err := writeJSON(rc.w, h.log, rc.traceID, result)
+	if err != nil {
 		h.log.Debug("response serialization error", slog.Any("err", err), slog.String("trace_id", rc.traceID))
 		rc.hl.Err = fmt.Errorf("serialize: %w", err)
 		rc.hl.StatusCode = http.StatusInternalServerError
@@ -229,6 +230,9 @@ func (h *resourceHandler) serializeResponse(rc *requestCtx, phaseLabel string, r
 		return
 	}
 
+	rc.hl.Extra = append(rc.hl.Extra, slog.Int("response_size_bytes", len(data)))
+	rc.hl.Extra = append(rc.hl.Extra, slog.Float64("response_size_kb", float64(len(data))/1024))        // to be removed after verifying typical response sizes are reasonable
+	rc.hl.Extra = append(rc.hl.Extra, slog.Float64("response_size_mb", float64(len(data))/(1024*1024))) // to be removed after verifying typical response sizes are reasonable
 	rc.hl.StatusCode = http.StatusOK
 	rc.hl.RowsReturned = len(result.Items)
 	rc.hl.addPhase(phaseLabel, time.Since(serStart))

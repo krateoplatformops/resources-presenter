@@ -3,6 +3,6 @@ name: resources-presenter
 description: Helm chart for resources-presenter service
 type: application
 
-# Placeholder SOLO per sviluppo locale
+# Placeholder: iw will be replaced with the actual version during the release process.
 version: 0.0.0
 appVersion: "0.0.0"

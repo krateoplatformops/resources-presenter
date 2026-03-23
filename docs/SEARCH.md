@@ -381,7 +381,7 @@ RBAC is enforced on every request.
 
 ### Sorting (list only)
 
-Fixed order: `updated_at DESC, id DESC`. Currently not user-configurable.
+TODO
 
 ---
 

@@ -62,7 +62,7 @@ kubectl create ns krateo-system
 
 ### 3.3 Deploy PostgreSQL
 
-Deploys an ephemeral Postgres pod with the schema and 500 seed Panel resources pre-loaded via init scripts. No PVC: data is lost when the pod is deleted.
+Deploys an ephemeral Postgres pod with the schema and 20000 seed Panel resources pre-loaded via init scripts. No PVC: data is lost when the pod is deleted.
 ```sh
 kubectl apply -f deploy/test-postgres.yaml
 kubectl wait --for=condition=ready pod -l app=postgres -n krateo-system --timeout=240s
@@ -74,7 +74,7 @@ kubectl exec -n krateo-system deploy/postgres -- \
   psql -U krateo -d krateo -c "SELECT count(*) FROM krateo_resources;"
 ```
 
-Expected output: `500`.
+Expected output: `20000`.
 
 ```sh
 kubectl exec -n krateo-system deploy/postgres -- \

@@ -174,7 +174,7 @@ Kubernetes-style `Status` objects:
 | `405` | Detail | Method not allowed (only GET) |
 | `500` | Both | Internal server error |
 
-See [SEARCH.md](SEARCH.md) for full examples including pagination loops.
+See [SEARCH.md](./docs/SEARCH.md) for full examples including pagination loops.
 
 ## Configuration
 
@@ -203,7 +203,7 @@ go test ./internal/sql/ -cover -v
 go test ./internal/handlers/ -cover -v
 ```
 
-See [TESTING.md](TESTING.md) for detailed testing instructions.
+See [TESTING.md](./docs/TESTING.md) for detailed testing instructions.
 
 ## Notes on RBAC
 
@@ -218,6 +218,11 @@ This practically means that RBAC is enforced on the resource type (group/version
 GET /livez   → 200 OK (checks if service is running)
 GET /readyz  → 200 OK (checks PostgreSQL connectivity)
 ```
+
+## Latency information
+
+Information about latency is logged for each request, broken down into phases.
+You can find more information about latency in [LATENCY.md](./docs/LATENCY.md).
 
 ## License
 
