@@ -15,7 +15,7 @@ import (
 
 const (
 	defaultLimit = 100
-	maxLimit     = 1000
+	maxLimit     = 5000
 	queryTimeout = 10 * time.Second
 )
 
