@@ -179,7 +179,3 @@ config:
   # Kubernetes namespace where {username}-clientconfig Secrets are stored.
   # Used by use.UserConfig middleware to load user credentials for RBAC.
   AUTHN_NS: "krateo-system"
-
-  # RBAC decision cache TTL. Higher values reduce K8s API calls but delay
-  # permission changes from taking effect. Default in plumbing: 10s.
-  RBAC_USERCAN_CACHE_TTL: "120s"

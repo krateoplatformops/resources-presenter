@@ -1,6 +1,6 @@
 # `/resources` Search Guide
 
-This document provides full examples for querying the resources-presenter API.
+This document provides full examples for querying the `resources-presenter` API.
 
 ## Endpoints Overview
 
@@ -20,7 +20,7 @@ Both endpoints return items with the same fields:
 | --- | --- | --- | --- |
 | `name` | string | Always | Resource name |
 | `uid` | string | Always | Kubernetes UID |
-| `global_uid` | string | Always | Composite key (`cluster_name:uid`) — uniquely identifies a resource across clusters |
+| `global_uid` | string | Always | Composite key (`cluster_name:uid`): uniquely identifies a resource across clusters |
 | `namespace` | string | Always | Kubernetes namespace |
 | `group` | string | Always | API group (e.g. `apps`) |
 | `version` | string | Always | API version (e.g. `v1`) |
@@ -31,11 +31,11 @@ Both endpoints return items with the same fields:
 | `updated_at` | RFC3339 | Always | When the resource was last updated |
 | `composition_id` | UUID | When set | Krateo composition UUID (omitted when null) |
 | `raw` | object | Conditional | Full Kubernetes object. **List:** only when `raw=true`. **Detail:** included by default, use `?raw=false` to exclude. |
-| `status_raw` | object | Conditional | Kubernetes status subtree (denormalized). **List:** only when `status_raw=true`. **Detail:** always included when present. Omitted when NULL in DB. |
+| `status_raw` | object | Conditional | Kubernetes status subtree. **List:** only when `status_raw=true`. **Detail:** always included when present. Omitted when NULL in DB. |
 
 ---
 
-## List Endpoint — `GET /resources` and `POST /resources`
+## List Endpoint: `GET /resources` and `POST /resources`
 
 ### Resource Resolution
 
@@ -69,11 +69,11 @@ All filters (except `group`) are optional and are combined with `AND`.
 | `since` | RFC3339 timestamp | Includes resources with `updated_at >= since`. |
 | `raw` | boolean | If `true`, include the full `raw` JSONB field in the response. Default: `false`. |
 | `status_raw` | boolean | If `true`, include the `status_raw` JSONB field (Kubernetes status subtree). Default: `false`. |
-| `limit` | integer | Page size. Default: `100`. Use `-1` for unlimited (returns all results, no pagination). |
+| `limit` | integer | Page size. Default: `100`. Minimum: `1`, Maximum: `5000`. |
 | `cursor` | base64 string | Keyset cursor for pagination (opaque token returned by previous response). |
 
-If `since` is not valid RFC3339, `labels` is not valid JSON, or `composition_id` is not a valid UUID, the API returns `400`.
-If `cursor` is invalid base64/JSON, the API returns `400`.
+If `since` is not valid RFC3339, `labels` is not valid JSON, or `composition_id` is not a valid UUID, the API returns a `400` error.
+If `cursor` is invalid base64/JSON, the API returns a `400` error.
 
 ### POST JSON Body (list only)
 
@@ -257,6 +257,7 @@ curl --get "http://localhost:8080/resources" \
   --data-urlencode 'labels={"app":"payments"}' \
   --data-urlencode "since=2026-03-01T00:00:00Z" \
   --data-urlencode "raw=true" \
+  --data-urlencode "status_raw=true" \
   --data-urlencode "limit=100"
 ```
 
@@ -275,6 +276,7 @@ curl --request POST "http://localhost:8080/resources" \
     "labels": {"app": "payments"},
     "since": "2026-03-01T00:00:00Z",
     "raw": true,
+    "status_raw": true,
     "limit": 100
   }'
 ```
@@ -291,7 +293,7 @@ The cursor is built from the last returned row (`updated_at`, `id`) and is opaqu
 
 When there are no more pages, the `cursor` field is absent in the response.
 
-Pagination is **not available** on the detail endpoint — it always returns exactly 0 or 1 items.
+Pagination is **not available** on the detail endpoint: it always returns exactly 0 or 1 items.
 
 #### GET pagination
 
@@ -375,10 +377,11 @@ done
 ```
 
 If you change filters between pages, pagination continuity is broken.
+RBAC is enforced on every request.
 
 ### Sorting (list only)
 
-Fixed order: `updated_at DESC, id DESC`. Currently not user-configurable.
+TODO
 
 ---
 
@@ -397,9 +400,9 @@ Fetches a single resource by its `global_uid`. This endpoint does **not** accept
 | Parameter | Type | Default | Behavior |
 | --- | --- | --- | --- |
 | `raw` | boolean | `true` | Include the full Kubernetes object. Set `?raw=false` to exclude. |
+| `status_raw` | boolean | `true` | Include the Kubernetes status subtree. Set `?status_raw=false` to exclude. |
 
-Note: `raw` defaults to `true` here (opposite of the list endpoint where it defaults to `false`).
-`status_raw` is always selected on the detail endpoint (no query parameter needed); it is omitted from the response only when NULL in the database.
+Note: `raw` and `status_raw` both default to `true` here (opposite of the list endpoint where they default to `false`).
 
 ### Detail Response
 
@@ -427,9 +430,9 @@ Note: `raw` defaults to `true` here (opposite of the list endpoint where it defa
 ```
 
 - `count` is always `0` or `1`
-- No `cursor` field — there is no pagination on the detail endpoint
+- No `cursor` field: there is no pagination on the detail endpoint
 - `raw` is included by default; only absent when `?raw=false` is set
-- `status_raw` is always included on the detail endpoint when present in the database; omitted when NULL
+- `status_raw` is included by default; only absent when `?status_raw=false` is set
 
 ### Detail Examples
 
@@ -456,7 +459,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 | Code | Condition |
 | --- | --- |
 | `400` | Missing `global_uid` path parameter |
-| `403` | Forbidden — RBAC denied access to the requested resource |
+| `403` | Forbidden: RBAC denied access to the requested resource |
 | `404` | Resource not found — no active resource matches the given `global_uid` |
 | `405` | Method not allowed (only GET is supported) |
 | `500` | Internal server error |
@@ -470,7 +473,7 @@ Errors are returned as Kubernetes-style `Status` objects:
 | Status Code | List | Detail | Condition |
 | --- | --- | --- | --- |
 | `400` | Yes | Yes | Invalid or missing parameters |
-| `403` | Yes | Yes | Forbidden — RBAC denied access |
+| `403` | Yes | Yes | Forbidden: RBAC denied access |
 | `404` | — | Yes | Resource not found |
 | `405` | Yes | Yes | Method not allowed |
 | `500` | Yes | Yes | Internal server error |

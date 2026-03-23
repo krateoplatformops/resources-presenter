@@ -3,6 +3,7 @@ package config
 import (
 	"flag"
 	"fmt"
+	"log"
 	"log/slog"
 	"os"
 	"time"
@@ -14,7 +15,7 @@ import (
 
 const (
 	serviceName           = "resources-presenter"
-	defaultDbReadyTimeout = 4 * time.Minute
+	defaultDbReadyTimeout = 5 * time.Minute
 	defaultDebug          = false
 )
 
@@ -32,6 +33,23 @@ type Config struct {
 }
 
 func Setup() *Config {
+
+	// RBAC cache TTL. Higher values reduce K8s API calls but delay
+	// permission changes from taking effect.
+	// Default in plumbing: 10s.
+	// Force override: value cannot be changed by env variable or flag, it is set to a fixed value.
+	if err := os.Setenv("RBAC_USERCAN_CACHE_TTL", "180s"); err != nil {
+		log.Fatal("unable to set RBAC_USERCAN_CACHE_TTL environment variable", "error", err)
+	}
+
+	// RBAC cache max entries. Higher values reduce K8s API calls but delay
+	// permission changes from taking effect.
+	// Default in plumbing: 4096 entries.
+	// Force override: value cannot be changed by env variable or flag, it is set to a fixed value.
+	if err := os.Setenv("RBAC_USERCAN_CACHE_MAX_ENTRIES", "4096"); err != nil {
+		log.Fatal("unable to set RBAC_USERCAN_CACHE_MAX_ENTRIES environment variable", "error", err)
+	}
+
 	cfg := &Config{}
 
 	cfgPort := flag.Int("port",
@@ -63,6 +81,7 @@ func Setup() *Config {
 		env.String("DB_HOST", "localhost"),
 		"database host",
 	)
+
 	cfgDbPort := flag.Int("db-port",
 		env.Int("DB_PORT", 5432),
 		"database port",
@@ -88,8 +107,6 @@ func Setup() *Config {
 		"Kubernetes namespace where user clientconfig secrets are stored",
 	)
 
-	// TODO: overwrite RBAC env vars to disallow env var setup for RBAC configurationå
-
 	flag.Usage = func() {
 		fmt.Fprintln(flag.CommandLine.Output(), "Flags:")
 		flag.PrintDefaults()
@@ -102,7 +119,6 @@ func Setup() *Config {
 	cfg.DbReadyTimeout = *cfgDbReadyTimeout
 	cfg.SigningKey = *cfgjwtSignKey
 	cfg.AuthnNS = *cfgAuthnNS
-
 	cfg.Log = logutil.New(serviceName, cfg.Debug)
 
 	params, err := parseDBParams(*cfgDbParams)
