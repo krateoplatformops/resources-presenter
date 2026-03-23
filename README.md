@@ -50,7 +50,6 @@ All filters are optional (except `group`) and combined with `AND`.
 | `since` | RFC3339 | Resources with `updated_at >= since` |
 | `raw` | boolean | Include full Kubernetes object (default: `false`) |
 | `status_raw` | boolean | Include Kubernetes status subtree (default: `false`) |
-| `sort_by` | string | Sort order. One of: `resource` (default), `created_at`, `updated_at`, `global_uid`, `composition_id`. |
 | `limit` | integer | Page size (default: `100`). Minimum: `1`, Maximum: `5000`. |
 | `cursor` | base64 | Opaque keyset cursor from previous response. Cursor is sort-order-aware: a cursor from one `sort_by` cannot be reused with a different one. |
 
@@ -110,6 +109,10 @@ The `namespace` parameter follows Kubernetes API semantics:
 | `prod`, `krateo-system`, etc. | Exact match on the specified namespace |
 
 This mirrors how `kubectl` works: commands target the `default` namespace unless `-n` or `--all-namespaces` is specified.
+
+#### Sorting
+
+The `sort_by` parameter controls the sort order of results. The default is `resource` (`group`, `version`, `resource (plural)`, `namespace`, `name`). Other options are `created_at`, `updated_at`, `global_uid`, and `composition_id`.
 
 ---
 
@@ -212,7 +215,7 @@ See [TESTING.md](./docs/TESTING.md) for detailed testing instructions.
 **RBAC is enforced at resource level and not on the single object**.
 For instance, if a user has access to `widgets.templates.krateo.io/panels` in namespace `krateo-system` then they can see all the panels in that namespace.
 However, if they don't have access to `widgets.templates.krateo.io/panels` in `krateo-system` then they can't see any panel in that namespace, even if they have access to a specific panel object like `widgets.templates.krateo.io/panels/my-panel` in `krateo-system`.
-This practically means that RBAC is enforced on the resource type (group/version/resource) + namespaceand not on the single object and so for a user to have access to a specific object they need to have access to the whole resource type in that namespace.
+This practically means that RBAC is enforced on the resource type (group/version/resource) + namespace and not on the single object and so for a user to have access to a specific object they need to have access to the whole resource type in that namespace.
 
 ## Health Probes
 
