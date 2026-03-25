@@ -39,6 +39,7 @@ type ListParams struct {
 	Raw             bool
 	StatusRaw       bool // include status_raw JSONB column
 	SortBy          SortBy
+	SortOrder       SortOrder
 	Limit           int
 	Cursor          EncodedCursor
 
@@ -81,7 +82,6 @@ type ListResult struct {
 // - ResourceGroup (required)
 // - ResourceVersion, ResourcePlural, Namespace, Cluster (all optional, to narrow down the result set)
 // Only active rows are considered.
-
 func DiscoverTargets(ctx context.Context, db Querier, p ListParams) ([]ResourceTarget, error) {
 	b := NewBuilder()
 
@@ -224,6 +224,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 	}
 
 	sortBy := normaliseSortBy(p.SortBy)
+	sortOrder := normaliseSortOrder(p.SortOrder, sortBy)
 	result := &ListResult{}
 
 	// Pagination: trim to requested limit and compute next-page cursor.
@@ -236,7 +237,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 
 		if hasNextPage && len(cursors) > 0 {
 			last := cursors[len(cursors)-1]
-			result.Cursor = EncodeCursor(buildCursor(sortBy, last))
+			result.Cursor = EncodeCursor(buildCursor(sortBy, sortOrder, last))
 		}
 	}
 
@@ -302,23 +303,24 @@ func buildListQuery(p ListParams) (string, []any, error) {
 		b.Where("updated_at >= ?", *p.Since)
 	}
 
-	// Resolve sort order (default to SortByResource when unset).
+	// Resolve sort column and direction (defaults when unset).
 	sortBy := normaliseSortBy(p.SortBy)
+	sortOrder := normaliseSortOrder(p.SortOrder, sortBy)
 
 	// Keyset pagination cursor
 	cur, err := DecodeCursor(p.Cursor)
 	if err != nil {
 		return "", nil, err
 	}
-	if err := validateCursorSort(cur, sortBy); err != nil {
+	if err := validateCursorSort(cur, sortBy, sortOrder); err != nil {
 		return "", nil, err
 	}
 	if cur != nil {
-		cursorWhere, cursorArgs := cursorCondition(sortBy, cur)
+		cursorWhere, cursorArgs := cursorCondition(sortBy, sortOrder, cur)
 		b.Where(cursorWhere, cursorArgs...)
 	}
 
-	b.OrderBy(sortOrderSQL(sortBy))
+	b.OrderBy(sortOrderSQL(sortBy, sortOrder))
 
 	// Fetch limit+1 to detect whether a next page exists.
 	if p.Limit > 0 {

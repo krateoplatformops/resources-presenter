@@ -27,6 +27,45 @@ var validSortValues = []SortBy{
 	SortByResource, SortByCreatedAt, SortByUpdatedAt, SortByGlobalUID, SortByCompositionID,
 }
 
+// SortOrder specifies ascending or descending direction for the sort.
+type SortOrder string
+
+const (
+	SortOrderAsc  SortOrder = "asc"
+	SortOrderDesc SortOrder = "desc"
+)
+
+// ValidateSortOrder returns an error if o is not a recognised sort order direction.
+// An empty string is valid and means "use the default for the chosen sort_by column".
+func ValidateSortOrder(o SortOrder) error {
+	switch o {
+	case SortOrderAsc, SortOrderDesc, "":
+		return nil
+	default:
+		return fmt.Errorf("invalid sort_order value %q: must be one of: asc, desc", o)
+	}
+}
+
+// defaultSortOrder returns the conventional default direction for each SortBy column.
+// created_at and updated_at default to DESC (most recent first); all others default to ASC.
+func defaultSortOrder(s SortBy) SortOrder {
+	switch s {
+	case SortByCreatedAt, SortByUpdatedAt:
+		return SortOrderDesc
+	default:
+		return SortOrderAsc
+	}
+}
+
+// normaliseSortOrder returns the effective SortOrder: if o is empty, it falls back
+// to the per-column default for the given SortBy.
+func normaliseSortOrder(o SortOrder, s SortBy) SortOrder {
+	if o == "" {
+		return defaultSortOrder(s)
+	}
+	return o
+}
+
 // ValidateSortBy returns an error if s is not a recognised sort order.
 // An empty string is valid and means "use default".
 func ValidateSortBy(s SortBy) error {
@@ -46,20 +85,40 @@ func normaliseSortBy(s SortBy) SortBy {
 	return s
 }
 
-// sortOrderSQL returns the ORDER BY clause for the given sort order.
-func sortOrderSQL(s SortBy) string {
+// dirStr returns "ASC" or "DESC" for the given SortOrder.
+func dirStr(o SortOrder) string {
+	if o == SortOrderDesc {
+		return "DESC"
+	}
+	return "ASC"
+}
+
+// nullsClause returns the NULLS FIRST/LAST suffix for nullable columns.
+// ASC uses NULLS LAST (NULLs at the end), DESC uses NULLS FIRST (NULLs at the end in reverse).
+func nullsClause(o SortOrder) string {
+	if o == SortOrderDesc {
+		return "NULLS FIRST"
+	}
+	return "NULLS LAST"
+}
+
+// sortOrderSQL returns the ORDER BY clause for the given sort column and direction.
+func sortOrderSQL(s SortBy, o SortOrder) string {
+	dir := dirStr(o)
 	switch s {
 	case SortByCreatedAt:
-		return "created_at DESC, id DESC"
+		return fmt.Sprintf("created_at %s, id %s", dir, dir)
 	case SortByUpdatedAt:
-		return "updated_at DESC, id DESC"
+		return fmt.Sprintf("updated_at %s, id %s", dir, dir)
 	case SortByGlobalUID:
-		return "global_uid ASC, id ASC"
+		return fmt.Sprintf("global_uid %s, id %s", dir, dir)
 	case SortByCompositionID:
-		return "composition_id ASC NULLS LAST, id ASC"
+		return fmt.Sprintf("composition_id %s %s, id %s", dir, nullsClause(o), dir)
 	case SortByResource:
-		return "resource_group ASC, resource_version ASC, resource_plural ASC, namespace ASC, resource_name ASC, id ASC"
+		return fmt.Sprintf("resource_group %s, resource_version %s, resource_plural %s, namespace %s, resource_name %s, id %s",
+			dir, dir, dir, dir, dir, dir)
 	default:
-		return "resource_group ASC, resource_version ASC, resource_plural ASC, namespace ASC, resource_name ASC, id ASC"
+		return fmt.Sprintf("resource_group %s, resource_version %s, resource_plural %s, namespace %s, resource_name %s, id %s",
+			dir, dir, dir, dir, dir, dir)
 	}
 }

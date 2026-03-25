@@ -235,6 +235,7 @@ func TestBuildListQuery_AllFilterCombinations(t *testing.T) {
 	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	cursor := EncodeCursor(&ResourcesCursor{
 		SortBy:    SortByUpdatedAt,
+		SortOrder: SortOrderDesc,
 		UpdatedAt: timePtr(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)),
 		ID:        42,
 	})

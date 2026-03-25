@@ -204,6 +204,13 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system' | jq
 ```
 
+**List Panels sorted by update time ascending (oldest first):**
+
+```sh
+curl -s -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/resources?group=widgets.templates.krateo.io&version=v1beta1&resource=panels&namespace=krateo-system&sort_by=updated_at&sort_order=asc' | jq '.items[].updated_at'
+```
+
 **List Panels with full raw objects:**
 
 ```sh

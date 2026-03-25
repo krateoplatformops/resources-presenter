@@ -11,10 +11,11 @@ import (
 type EncodedCursor string
 
 // ResourcesCursor holds the internal keyset pagination state.
-// Each sort order populates only the fields it needs; the SortBy field
-// records which order produced the cursor so that we can reject mismatches.
+// Each sort order populates only the fields it needs; the SortBy and SortOrder
+// fields record which order produced the cursor so that we can reject mismatches.
 type ResourcesCursor struct {
-	SortBy SortBy `json:"s"`
+	SortBy    SortBy    `json:"s"`
+	SortOrder SortOrder `json:"o,omitempty"`
 
 	// Tiebreaker: always present for every sort order.
 	ID int64 `json:"i"`
@@ -106,23 +107,27 @@ func ValidateCursor(s EncodedCursor) error {
 	return err
 }
 
-// validateCursorSort checks that the cursor's sort order matches the request's sort order.
+// validateCursorSort checks that the cursor's sort_by and sort_order match the request.
 // Returns a user-facing error when they differ.
-func validateCursorSort(cur *ResourcesCursor, sortBy SortBy) error {
+func validateCursorSort(cur *ResourcesCursor, sortBy SortBy, sortOrder SortOrder) error {
 	if cur == nil {
 		return nil
 	}
 	if cur.SortBy != sortBy {
 		return fmt.Errorf("cursor was created with sort_by=%q but request uses sort_by=%q; cursors are not reusable across sort orders", cur.SortBy, sortBy)
 	}
+	if cur.SortOrder != sortOrder {
+		return fmt.Errorf("cursor was created with sort_order=%q but request uses sort_order=%q; cursors are not reusable across sort orders", cur.SortOrder, sortOrder)
+	}
 	return nil
 }
 
 // buildCursor constructs a ResourcesCursor from the last row of the current page.
-func buildCursor(sortBy SortBy, rc rowCursor) *ResourcesCursor {
+func buildCursor(sortBy SortBy, sortOrder SortOrder, rc rowCursor) *ResourcesCursor {
 	c := &ResourcesCursor{
-		SortBy: sortBy,
-		ID:     rc.id,
+		SortBy:    sortBy,
+		SortOrder: sortOrder,
+		ID:        rc.id,
 	}
 	switch sortBy {
 	case SortByCreatedAt:
@@ -147,43 +152,65 @@ func buildCursor(sortBy SortBy, rc rowCursor) *ResourcesCursor {
 	return c
 }
 
+// cursorOp returns ">" for ASC pagination (paging forward toward later rows)
+// and "<" for DESC pagination (paging forward toward earlier rows).
+func cursorOp(o SortOrder) string {
+	if o == SortOrderDesc {
+		return "<"
+	}
+	return ">"
+}
+
 // cursorCondition returns a WHERE clause fragment and args for keyset pagination
-// based on the current sort order.
+// based on the current sort column and direction.
 //
 // DESC sorts use (col, id) < (?, ?) to page forward (toward older rows).
 // ASC sorts use (col, id) > (?, ?) to page forward (toward later rows).
 //
-// For composition_id (nullable), we handle NULLs explicitly so rows with NULL
-// sort after all non-NULL values (NULLS LAST).
-func cursorCondition(s SortBy, cur *ResourcesCursor) (string, []any) {
+// For composition_id (nullable), we handle NULLs explicitly.
+func cursorCondition(s SortBy, o SortOrder, cur *ResourcesCursor) (string, []any) {
+	op := cursorOp(o)
 	switch s {
 	case SortByCreatedAt:
-		return "(created_at, id) < (?, ?)", []any{*cur.CreatedAt, cur.ID}
+		return fmt.Sprintf("(created_at, id) %s (?, ?)", op), []any{*cur.CreatedAt, cur.ID}
 	case SortByUpdatedAt:
-		return "(updated_at, id) < (?, ?)", []any{*cur.UpdatedAt, cur.ID}
+		return fmt.Sprintf("(updated_at, id) %s (?, ?)", op), []any{*cur.UpdatedAt, cur.ID}
 	case SortByGlobalUID:
-		return "(global_uid, id) > (?, ?)", []any{cur.GlobalUID, cur.ID}
+		return fmt.Sprintf("(global_uid, id) %s (?, ?)", op), []any{cur.GlobalUID, cur.ID}
 	case SortByCompositionID:
-		return compositionIDCursorCondition(cur)
+		return compositionIDCursorCondition(o, cur)
 	case SortByResource:
-		return "(resource_group, resource_version, resource_plural, namespace, resource_name, id) > (?, ?, ?, ?, ?, ?)",
+		return fmt.Sprintf("(resource_group, resource_version, resource_plural, namespace, resource_name, id) %s (?, ?, ?, ?, ?, ?)", op),
 			[]any{cur.Group, cur.Version, cur.Resource, cur.Namespace, cur.Name, cur.ID}
 	default:
-		return "(resource_group, resource_version, resource_plural, namespace, resource_name, id) > (?, ?, ?, ?, ?, ?)",
+		return fmt.Sprintf("(resource_group, resource_version, resource_plural, namespace, resource_name, id) %s (?, ?, ?, ?, ?, ?)", op),
 			[]any{cur.Group, cur.Version, cur.Resource, cur.Namespace, cur.Name, cur.ID}
 	}
 }
 
-// compositionIDCursorCondition builds the keyset condition for composition_id
-// sorting (ASC NULLS LAST). There are two cases:
+// compositionIDCursorCondition builds the keyset condition for composition_id sorting.
 //
-//  1. Cursor has a non-NULL composition_id: the next page contains rows with
-//     a strictly greater composition_id, OR the same composition_id with a greater id,
-//     OR rows with NULL composition_id (which sort last).
+// ASC NULLS LAST (default):
+//  1. Non-NULL cursor: next page has strictly greater composition_id, OR same id with greater tiebreaker, OR NULLs.
+//  2. NULL cursor: only NULL rows remain; page by id tiebreaker.
 //
-//  2. Cursor has a NULL composition_id: the remaining rows all have NULL
-//     composition_id, so we only need the id tiebreaker.
-func compositionIDCursorCondition(cur *ResourcesCursor) (string, []any) {
+// DESC NULLS FIRST (reversed):
+//  1. NULL cursor: next page has NULL with smaller tiebreaker, OR any non-NULL rows.
+//  2. Non-NULL cursor: strictly less composition_id, OR same with smaller tiebreaker.
+func compositionIDCursorCondition(o SortOrder, cur *ResourcesCursor) (string, []any) {
+	op := cursorOp(o)
+	if o == SortOrderDesc {
+		// DESC NULLS FIRST: NULLs come first, then non-NULL values in descending order.
+		if cur.CompositionIDNull {
+			// Cursor row had NULL → next rows are NULLs with smaller id, OR any non-NULL row.
+			return "(composition_id IS NULL AND id < ?) OR composition_id IS NOT NULL", []any{cur.ID}
+		}
+		// Cursor row had a value → strictly less composition_id, or same with smaller id.
+		return fmt.Sprintf("(composition_id %s ? OR (composition_id = ? AND id %s ?))", op, op),
+			[]any{*cur.CompositionID, *cur.CompositionID, cur.ID}
+	}
+
+	// ASC NULLS LAST (original behaviour).
 	if cur.CompositionIDNull {
 		// Cursor row had NULL → only NULL rows remain; page by id.
 		return "composition_id IS NULL AND id > ?", []any{cur.ID}

@@ -82,6 +82,9 @@ func validateListParams(p *sql.ListParams) error {
 	if err := sql.ValidateSortBy(p.SortBy); err != nil {
 		return err
 	}
+	if err := sql.ValidateSortOrder(p.SortOrder); err != nil {
+		return err
+	}
 	if err := sql.ValidateCursor(p.Cursor); err != nil {
 		return fmt.Errorf("invalid cursor: %w", err)
 	}

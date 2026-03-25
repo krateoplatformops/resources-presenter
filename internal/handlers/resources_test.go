@@ -1034,6 +1034,7 @@ func TestParseListParamsJSON_OK(t *testing.T) {
 	cursorTs := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	validCursor := string(sqlpkg.EncodeCursor(&sqlpkg.ResourcesCursor{
 		SortBy:    sqlpkg.SortByUpdatedAt,
+		SortOrder: sqlpkg.SortOrderDesc,
 		UpdatedAt: &cursorTs,
 		ID:        42,
 	}))
@@ -2293,8 +2294,21 @@ func TestValidateListParams(t *testing.T) {
 			params: sqlpkg.ListParams{ResourceGroup: "apps", SortBy: sqlpkg.SortByCreatedAt},
 		},
 		{
+			name:    "invalid sort_order",
+			params:  sqlpkg.ListParams{ResourceGroup: "apps", SortOrder: "invalid"},
+			wantErr: "invalid sort_order",
+		},
+		{
+			name:   "valid sort_order asc",
+			params: sqlpkg.ListParams{ResourceGroup: "apps", SortOrder: sqlpkg.SortOrderAsc},
+		},
+		{
+			name:   "valid sort_order desc",
+			params: sqlpkg.ListParams{ResourceGroup: "apps", SortOrder: sqlpkg.SortOrderDesc},
+		},
+		{
 			name:   "valid cursor",
-			params: sqlpkg.ListParams{ResourceGroup: "apps", Cursor: sqlpkg.EncodeCursor(&sqlpkg.ResourcesCursor{SortBy: sqlpkg.SortByUpdatedAt, UpdatedAt: func() *time.Time { t := time.Now(); return &t }(), ID: 1})},
+			params: sqlpkg.ListParams{ResourceGroup: "apps", Cursor: sqlpkg.EncodeCursor(&sqlpkg.ResourcesCursor{SortBy: sqlpkg.SortByUpdatedAt, SortOrder: sqlpkg.SortOrderDesc, UpdatedAt: func() *time.Time { t := time.Now(); return &t }(), ID: 1})},
 		},
 	}
 	for _, tt := range tests {
@@ -2773,6 +2787,193 @@ func TestResourcesSort_CompositionIDPaginationAcrossNullBoundary(t *testing.T) {
 	for i := 3; i < 6; i++ {
 		if !strings.HasPrefix(allNames[i], "no-comp") {
 			t.Errorf("position %d: expected no-comp prefix, got %s", i, allNames[i])
+		}
+	}
+}
+
+// --- Integration tests: sort_order ---
+
+func TestResourcesSortOrder_CreatedAtAsc(t *testing.T) {
+	db := testDB(t)
+	applySchema(t, db)
+
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedSortable(t, db, []seedSortableResource{
+		{Name: "old", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base, UpdatedAt: base},
+		{Name: "mid", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base.Add(time.Hour), UpdatedAt: base.Add(time.Hour)},
+		{Name: "new", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base.Add(2 * time.Hour), UpdatedAt: base.Add(2 * time.Hour)},
+	})
+
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+
+	// sort_by=created_at with sort_order=asc → oldest first (reverse of default).
+	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
+		"namespace":  "default",
+		"sort_by":    "created_at",
+		"sort_order": "asc",
+	})
+	items := extractItems(t, resp)
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(items))
+	}
+	names := make([]string, len(items))
+	for i, item := range items {
+		names[i] = item.(map[string]any)["name"].(string)
+	}
+	// ASC: old, mid, new
+	expected := []string{"old", "mid", "new"}
+	for i, want := range expected {
+		if names[i] != want {
+			t.Errorf("position %d: expected %s, got %s (all: %v)", i, want, names[i], names)
+		}
+	}
+}
+
+func TestResourcesSortOrder_CreatedAtDefaultDesc(t *testing.T) {
+	db := testDB(t)
+	applySchema(t, db)
+
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedSortable(t, db, []seedSortableResource{
+		{Name: "old", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base, UpdatedAt: base},
+		{Name: "new", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base.Add(time.Hour), UpdatedAt: base.Add(time.Hour)},
+	})
+
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+
+	// sort_by=created_at without sort_order → default DESC (new first).
+	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
+		"namespace": "default",
+		"sort_by":   "created_at",
+	})
+	items := extractItems(t, resp)
+	first := items[0].(map[string]any)["name"].(string)
+	if first != "new" {
+		t.Fatalf("expected first item 'new' (default DESC), got %s", first)
+	}
+}
+
+func TestResourcesSortOrder_InvalidValue(t *testing.T) {
+	db := testDB(t)
+
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+
+	req := httptest.NewRequest("GET", "/resources?group=apps&version=v1&resource=deployments&sort_order=invalid", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "sort_order") {
+		t.Errorf("expected error to mention sort_order, got: %s", rec.Body.String())
+	}
+}
+
+func TestResourcesSortOrder_POST_CreatedAtAsc(t *testing.T) {
+	db := testDB(t)
+	applySchema(t, db)
+
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	seedSortable(t, db, []seedSortableResource{
+		{Name: "old", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base, UpdatedAt: base},
+		{Name: "new", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base.Add(time.Hour), UpdatedAt: base.Add(time.Hour)},
+	})
+
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+
+	resp := callResourcesPOST(t, handler, map[string]any{
+		"group":      "apps",
+		"version":    "v1",
+		"resource":   "deployments",
+		"namespace":  "default",
+		"sort_by":    "created_at",
+		"sort_order": "asc",
+	})
+	items := extractItems(t, resp)
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	// ASC: old first.
+	first := items[0].(map[string]any)["name"].(string)
+	if first != "old" {
+		t.Fatalf("expected first item 'old' (sort_order=asc), got %s", first)
+	}
+}
+
+func TestResourcesSortOrder_PaginationConsistencyAsc(t *testing.T) {
+	db := testDB(t)
+	applySchema(t, db)
+
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	var resources []seedSortableResource
+	for i := 0; i < 10; i++ {
+		resources = append(resources, seedSortableResource{
+			Name:      fmt.Sprintf("res-%02d", i),
+			Namespace: "default",
+			Cluster:   "c1",
+			Group:     "apps",
+			Version:   "v1",
+			Kind:      "Deployment",
+			Plural:    "deployments",
+			CreatedAt: base.Add(time.Duration(i) * time.Minute),
+			UpdatedAt: base.Add(time.Duration(i) * time.Minute),
+		})
+	}
+	seedSortable(t, db, resources)
+
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+
+	// Page through with limit=3, sort_by=created_at, sort_order=asc.
+	var allNames []string
+	cursor := ""
+	for page := 0; page < 10; page++ {
+		extra := map[string]string{
+			"namespace":  "default",
+			"sort_by":    "created_at",
+			"sort_order": "asc",
+			"limit":      "3",
+		}
+		if cursor != "" {
+			extra["cursor"] = cursor
+		}
+		resp := callResourcesGET(t, handler, "apps", "v1", "deployments", extra)
+		items := extractItems(t, resp)
+		if len(items) == 0 {
+			break
+		}
+		for _, item := range items {
+			allNames = append(allNames, item.(map[string]any)["name"].(string))
+		}
+		cursorVal, _ := resp["cursor"].(string)
+		if cursorVal == "" {
+			break
+		}
+		cursor = cursorVal
+	}
+
+	if len(allNames) != 10 {
+		t.Fatalf("expected 10 total items across pages, got %d: %v", len(allNames), allNames)
+	}
+
+	// No duplicates.
+	seen := make(map[string]bool)
+	for _, n := range allNames {
+		if seen[n] {
+			t.Fatalf("duplicate item %q across pages", n)
+		}
+		seen[n] = true
+	}
+
+	// ASC order: res-00, res-01, ..., res-09.
+	for i, n := range allNames {
+		expected := fmt.Sprintf("res-%02d", i)
+		if n != expected {
+			t.Fatalf("position %d: expected %s, got %s (full: %v)", i, expected, n, allNames)
 		}
 	}
 }

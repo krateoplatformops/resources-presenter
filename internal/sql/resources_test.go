@@ -464,7 +464,7 @@ func TestListResources_WithCursor(t *testing.T) {
 
 	cursorTime := time.Date(2026, 3, 1, 11, 59, 0, 0, time.UTC)
 	cursorID := int64(20)
-	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByUpdatedAt, UpdatedAt: timePtr(cursorTime), ID: cursorID})
+	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByUpdatedAt, SortOrder: SortOrderDesc, UpdatedAt: timePtr(cursorTime), ID: cursorID})
 
 	created := cursorTime.Add(-24 * time.Hour)
 	rows := pgxmock.NewRows(baseCols()).
@@ -519,7 +519,7 @@ func TestBuildListQuery_AllFilters(t *testing.T) {
 	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	cursorTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	cursorID := int64(42)
-	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByUpdatedAt, UpdatedAt: timePtr(cursorTime), ID: cursorID})
+	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByUpdatedAt, SortOrder: SortOrderDesc, UpdatedAt: timePtr(cursorTime), ID: cursorID})
 
 	p := deploymentParams("prod", 25)
 	p.SortBy = SortByUpdatedAt
@@ -602,6 +602,7 @@ func TestCursorRoundtrip(t *testing.T) {
 	ts := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	original := &ResourcesCursor{
 		SortBy:    SortByUpdatedAt,
+		SortOrder: SortOrderDesc,
 		UpdatedAt: &ts,
 		ID:        42,
 	}
@@ -617,6 +618,9 @@ func TestCursorRoundtrip(t *testing.T) {
 	}
 	if decoded.SortBy != original.SortBy {
 		t.Errorf("SortBy = %q, want %q", decoded.SortBy, original.SortBy)
+	}
+	if decoded.SortOrder != original.SortOrder {
+		t.Errorf("SortOrder = %q, want %q", decoded.SortOrder, original.SortOrder)
 	}
 	if decoded.UpdatedAt == nil || !decoded.UpdatedAt.Equal(*original.UpdatedAt) {
 		t.Errorf("UpdatedAt = %v, want %v", decoded.UpdatedAt, original.UpdatedAt)
@@ -660,6 +664,7 @@ func TestValidateCursor_Empty(t *testing.T) {
 func TestValidateCursor_Valid(t *testing.T) {
 	cursor := EncodeCursor(&ResourcesCursor{
 		SortBy:    SortByUpdatedAt,
+		SortOrder: SortOrderDesc,
 		UpdatedAt: timePtr(time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)),
 		ID:        42,
 	})
@@ -811,7 +816,7 @@ func TestBuildListQuery_AllNewFilters(t *testing.T) {
 	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	cursorTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	cursorID := int64(42)
-	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByUpdatedAt, UpdatedAt: timePtr(cursorTime), ID: cursorID})
+	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByUpdatedAt, SortOrder: SortOrderDesc, UpdatedAt: timePtr(cursorTime), ID: cursorID})
 
 	p := deploymentParams("prod", 25)
 	p.SortBy = SortByUpdatedAt
@@ -853,7 +858,7 @@ func TestBuildListQuery_PlaceholderIndexing(t *testing.T) {
 	since := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	cursorTime := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	cursorID := int64(42)
-	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByUpdatedAt, UpdatedAt: timePtr(cursorTime), ID: cursorID})
+	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByUpdatedAt, SortOrder: SortOrderDesc, UpdatedAt: timePtr(cursorTime), ID: cursorID})
 
 	p := deploymentParams("prod", 25)
 	p.SortBy = SortByUpdatedAt
@@ -1805,6 +1810,149 @@ func TestValidateSortBy_Invalid(t *testing.T) {
 	}
 }
 
+// --- SortOrder tests ---
+
+func TestValidateSortOrder_AllValid(t *testing.T) {
+	for _, v := range []SortOrder{"", SortOrderAsc, SortOrderDesc} {
+		if err := ValidateSortOrder(v); err != nil {
+			t.Errorf("ValidateSortOrder(%q) unexpected error: %v", v, err)
+		}
+	}
+}
+
+func TestValidateSortOrder_Invalid(t *testing.T) {
+	for _, v := range []SortOrder{"ASC", "DESC", "ascending", "up", "1"} {
+		if err := ValidateSortOrder(v); err == nil {
+			t.Errorf("ValidateSortOrder(%q) expected error, got nil", v)
+		}
+	}
+}
+
+func TestDefaultSortOrder(t *testing.T) {
+	tests := []struct {
+		sortBy SortBy
+		want   SortOrder
+	}{
+		{SortByCreatedAt, SortOrderDesc},
+		{SortByUpdatedAt, SortOrderDesc},
+		{SortByResource, SortOrderAsc},
+		{SortByGlobalUID, SortOrderAsc},
+		{SortByCompositionID, SortOrderAsc},
+	}
+	for _, tt := range tests {
+		got := normaliseSortOrder("", tt.sortBy)
+		if got != tt.want {
+			t.Errorf("normaliseSortOrder(\"\", %q) = %q, want %q", tt.sortBy, got, tt.want)
+		}
+	}
+}
+
+func TestBuildListQuery_SortOrderAscOnCreatedAt(t *testing.T) {
+	p := deploymentParams("default", 50)
+	p.SortBy = SortByCreatedAt
+	p.SortOrder = SortOrderAsc // Override default DESC
+
+	query, _, err := buildListQuery(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(query, "created_at ASC") {
+		t.Errorf("expected created_at ASC, got:\n%s", query)
+	}
+	if strings.Contains(query, "DESC") {
+		t.Errorf("expected no DESC when sort_order=asc, got:\n%s", query)
+	}
+}
+
+func TestBuildListQuery_SortOrderDescOnGlobalUID(t *testing.T) {
+	p := deploymentParams("default", 50)
+	p.SortBy = SortByGlobalUID
+	p.SortOrder = SortOrderDesc // Override default ASC
+
+	query, _, err := buildListQuery(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(query, "global_uid DESC") {
+		t.Errorf("expected global_uid DESC, got:\n%s", query)
+	}
+}
+
+func TestBuildListQuery_SortOrderDescOnResource(t *testing.T) {
+	p := deploymentParams("default", 50)
+	p.SortBy = SortByResource
+	p.SortOrder = SortOrderDesc
+
+	query, _, err := buildListQuery(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(query, "resource_group DESC") {
+		t.Errorf("expected resource_group DESC, got:\n%s", query)
+	}
+	if strings.Contains(query, "ASC") {
+		t.Errorf("expected no ASC when sort_order=desc, got:\n%s", query)
+	}
+}
+
+func TestBuildListQuery_SortOrderDescOnCompositionID(t *testing.T) {
+	p := deploymentParams("default", 50)
+	p.SortBy = SortByCompositionID
+	p.SortOrder = SortOrderDesc
+
+	query, _, err := buildListQuery(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(query, "composition_id DESC NULLS FIRST") {
+		t.Errorf("expected composition_id DESC NULLS FIRST, got:\n%s", query)
+	}
+}
+
+func TestBuildListQuery_CursorSortOrderMismatch(t *testing.T) {
+	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByCreatedAt, SortOrder: SortOrderDesc, CreatedAt: timePtr(time.Now()), ID: 1})
+
+	p := deploymentParams("default", 50)
+	p.SortBy = SortByCreatedAt
+	p.SortOrder = SortOrderAsc // Mismatch: cursor has desc
+	p.Cursor = cursor
+
+	_, _, err := buildListQuery(p)
+	if err == nil {
+		t.Fatal("expected error for cursor sort_order mismatch")
+	}
+	if !strings.Contains(err.Error(), "sort_order") {
+		t.Errorf("expected sort_order mismatch error, got: %v", err)
+	}
+}
+
+func TestBuildListQuery_CursorCreatedAtAsc(t *testing.T) {
+	ts := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByCreatedAt, SortOrder: SortOrderAsc, CreatedAt: &ts, ID: 42})
+
+	p := deploymentParams("default", 50)
+	p.SortBy = SortByCreatedAt
+	p.SortOrder = SortOrderAsc
+	p.Cursor = cursor
+
+	query, _, err := buildListQuery(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// ASC uses > operator
+	if !strings.Contains(query, "(created_at, id) > (") {
+		t.Errorf("expected > cursor condition for ASC, got:\n%s", query)
+	}
+	if !strings.Contains(query, "created_at ASC") {
+		t.Errorf("expected ORDER BY created_at ASC, got:\n%s", query)
+	}
+}
+
 func TestBuildListQuery_DefaultSortIsResource(t *testing.T) {
 	p := deploymentParams("default", 50)
 	// SortBy is zero-value (""), should default to SortByResource.
@@ -1891,7 +2039,7 @@ func TestBuildListQuery_SortByResource(t *testing.T) {
 }
 
 func TestBuildListQuery_CursorSortMismatch(t *testing.T) {
-	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByUpdatedAt, UpdatedAt: timePtr(time.Now()), ID: 1})
+	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByUpdatedAt, SortOrder: SortOrderDesc, UpdatedAt: timePtr(time.Now()), ID: 1})
 
 	p := deploymentParams("default", 50)
 	p.SortBy = SortByCreatedAt
@@ -1908,7 +2056,7 @@ func TestBuildListQuery_CursorSortMismatch(t *testing.T) {
 
 func TestBuildListQuery_CursorCreatedAt(t *testing.T) {
 	ts := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
-	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByCreatedAt, CreatedAt: &ts, ID: 42})
+	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByCreatedAt, SortOrder: SortOrderDesc, CreatedAt: &ts, ID: 42})
 
 	p := deploymentParams("default", 50)
 	p.SortBy = SortByCreatedAt
@@ -1927,7 +2075,7 @@ func TestBuildListQuery_CursorCreatedAt(t *testing.T) {
 }
 
 func TestBuildListQuery_CursorGlobalUID(t *testing.T) {
-	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByGlobalUID, GlobalUID: "cluster-a:uid-100", ID: 100})
+	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByGlobalUID, SortOrder: SortOrderAsc, GlobalUID: "cluster-a:uid-100", ID: 100})
 
 	p := deploymentParams("default", 50)
 	p.SortBy = SortByGlobalUID
@@ -1947,7 +2095,7 @@ func TestBuildListQuery_CursorGlobalUID(t *testing.T) {
 
 func TestBuildListQuery_CursorCompositionIDNonNull(t *testing.T) {
 	compID := "550e8400-e29b-41d4-a716-446655440000"
-	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByCompositionID, CompositionID: &compID, ID: 42})
+	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByCompositionID, SortOrder: SortOrderAsc, CompositionID: &compID, ID: 42})
 
 	p := deploymentParams("default", 50)
 	p.SortBy = SortByCompositionID
@@ -1969,7 +2117,7 @@ func TestBuildListQuery_CursorCompositionIDNonNull(t *testing.T) {
 }
 
 func TestBuildListQuery_CursorCompositionIDNull(t *testing.T) {
-	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByCompositionID, CompositionIDNull: true, ID: 42})
+	cursor := EncodeCursor(&ResourcesCursor{SortBy: SortByCompositionID, SortOrder: SortOrderAsc, CompositionIDNull: true, ID: 42})
 
 	p := deploymentParams("default", 50)
 	p.SortBy = SortByCompositionID
@@ -1990,6 +2138,7 @@ func TestBuildListQuery_CursorCompositionIDNull(t *testing.T) {
 func TestBuildListQuery_CursorResource(t *testing.T) {
 	cursor := EncodeCursor(&ResourcesCursor{
 		SortBy:    SortByResource,
+		SortOrder: SortOrderAsc,
 		Group:     "apps",
 		Version:   "v1",
 		Resource:  "deployments",
@@ -2022,12 +2171,12 @@ func TestCursorRoundtrip_AllSortTypes(t *testing.T) {
 		name   string
 		cursor *ResourcesCursor
 	}{
-		{"updated_at", &ResourcesCursor{SortBy: SortByUpdatedAt, UpdatedAt: &ts, ID: 1}},
-		{"created_at", &ResourcesCursor{SortBy: SortByCreatedAt, CreatedAt: &ts, ID: 2}},
-		{"global_uid", &ResourcesCursor{SortBy: SortByGlobalUID, GlobalUID: "c:uid-1", ID: 3}},
-		{"composition_id_non_null", &ResourcesCursor{SortBy: SortByCompositionID, CompositionID: &compID, ID: 4}},
-		{"composition_id_null", &ResourcesCursor{SortBy: SortByCompositionID, CompositionIDNull: true, ID: 5}},
-		{"resource", &ResourcesCursor{SortBy: SortByResource, Group: "apps", Version: "v1", Resource: "deployments", Namespace: "default", Name: "nginx", ID: 6}},
+		{"updated_at", &ResourcesCursor{SortBy: SortByUpdatedAt, SortOrder: SortOrderDesc, UpdatedAt: &ts, ID: 1}},
+		{"created_at", &ResourcesCursor{SortBy: SortByCreatedAt, SortOrder: SortOrderDesc, CreatedAt: &ts, ID: 2}},
+		{"global_uid", &ResourcesCursor{SortBy: SortByGlobalUID, SortOrder: SortOrderAsc, GlobalUID: "c:uid-1", ID: 3}},
+		{"composition_id_non_null", &ResourcesCursor{SortBy: SortByCompositionID, SortOrder: SortOrderAsc, CompositionID: &compID, ID: 4}},
+		{"composition_id_null", &ResourcesCursor{SortBy: SortByCompositionID, SortOrder: SortOrderAsc, CompositionIDNull: true, ID: 5}},
+		{"resource", &ResourcesCursor{SortBy: SortByResource, SortOrder: SortOrderAsc, Group: "apps", Version: "v1", Resource: "deployments", Namespace: "default", Name: "nginx", ID: 6}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
