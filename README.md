@@ -51,7 +51,6 @@ All filters are optional (except `group`) and combined with `AND`.
 | `raw` | boolean | Include full Kubernetes object (default: `false`) |
 | `status_raw` | boolean | Include Kubernetes status subtree (default: `false`) |
 | `limit` | integer | Page size (default: `100`). Minimum: `1`, Maximum: `5000`. |
-| `sort_order` | string | Sort direction: `asc` or `desc`. Default depends on `sort_by`: `created_at` and `updated_at` default to `desc`, all others default to `asc`. |
 | `cursor` | base64 | Opaque keyset cursor from previous response. Cursor is sort-aware: a cursor from one `sort_by`/`sort_order` combination cannot be reused with a different one. |
 
 GET uses query parameters. POST uses the same fields as a JSON body (with `labels` as a JSON object, not a string). Note: `kind` is not a query parameter: the `resource` (plural) field is used for filtering. Only `group` is required; all other fields are optional.
