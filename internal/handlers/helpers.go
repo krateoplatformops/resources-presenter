@@ -79,6 +79,12 @@ func validateListParams(p *sql.ListParams) error {
 	if p.Name != "" && p.NameContains != "" {
 		return fmt.Errorf("'name' and 'name_contains' are mutually exclusive")
 	}
+	if err := sql.ValidateSortBy(p.SortBy); err != nil {
+		return err
+	}
+	if err := sql.ValidateSortOrder(p.SortOrder); err != nil {
+		return err
+	}
 	if err := sql.ValidateCursor(p.Cursor); err != nil {
 		return fmt.Errorf("invalid cursor: %w", err)
 	}

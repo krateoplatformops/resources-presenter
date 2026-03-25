@@ -38,6 +38,8 @@ type ListParams struct {
 	Since           *time.Time
 	Raw             bool
 	StatusRaw       bool // include status_raw JSONB column
+	SortBy          SortBy
+	SortOrder       SortOrder
 	Limit           int
 	Cursor          EncodedCursor
 
@@ -72,12 +74,6 @@ type ListResult struct {
 	Cursor EncodedCursor  `json:"cursor,omitempty"`
 }
 
-// rowCursor holds the pagination-relevant fields for each scanned row.
-type rowCursor struct {
-	updatedAt time.Time
-	id        int64
-}
-
 // DiscoverTargets queries krateo_resources for distinct (group, resource, namespace)
 // tuples matching the provided filters. The result is used to enumerate RBAC targets
 // before the main list query.
@@ -86,7 +82,6 @@ type rowCursor struct {
 // - ResourceGroup (required)
 // - ResourceVersion, ResourcePlural, Namespace, Cluster (all optional, to narrow down the result set)
 // Only active rows are considered.
-
 func DiscoverTargets(ctx context.Context, db Querier, p ListParams) ([]ResourceTarget, error) {
 	b := NewBuilder()
 
@@ -211,12 +206,25 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 		}
 
 		items = append(items, item)
-		cursors = append(cursors, rowCursor{updatedAt: updatedAt, id: id})
+		cursors = append(cursors, rowCursor{
+			id:            id,
+			updatedAt:     updatedAt,
+			createdAt:     createdAt,
+			globalUID:     globalUID,
+			compositionID: compositionID,
+			group:         resourceGroup,
+			version:       resourceVersion,
+			resource:      resourcePlural,
+			namespace:     namespace,
+			name:          resourceName,
+		})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
 	}
 
+	sortBy := normaliseSortBy(p.SortBy)
+	sortOrder := normaliseSortOrder(p.SortOrder, sortBy)
 	result := &ListResult{}
 
 	// Pagination: trim to requested limit and compute next-page cursor.
@@ -229,10 +237,7 @@ func ListResources(ctx context.Context, db Querier, p ListParams) (*ListResult, 
 
 		if hasNextPage && len(cursors) > 0 {
 			last := cursors[len(cursors)-1]
-			result.Cursor = EncodeCursor(&ResourcesCursor{
-				UpdatedAt: last.updatedAt,
-				ID:        last.id,
-			})
+			result.Cursor = EncodeCursor(buildCursor(sortBy, sortOrder, last))
 		}
 	}
 
@@ -298,16 +303,24 @@ func buildListQuery(p ListParams) (string, []any, error) {
 		b.Where("updated_at >= ?", *p.Since)
 	}
 
+	// Resolve sort column and direction (defaults when unset).
+	sortBy := normaliseSortBy(p.SortBy)
+	sortOrder := normaliseSortOrder(p.SortOrder, sortBy)
+
 	// Keyset pagination cursor
 	cur, err := DecodeCursor(p.Cursor)
 	if err != nil {
 		return "", nil, err
 	}
+	if err := validateCursorSort(cur, sortBy, sortOrder); err != nil {
+		return "", nil, err
+	}
 	if cur != nil {
-		b.Where("(updated_at, id) < (?, ?)", cur.UpdatedAt, cur.ID)
+		cursorWhere, cursorArgs := cursorCondition(sortBy, sortOrder, cur)
+		b.Where(cursorWhere, cursorArgs...)
 	}
 
-	b.OrderBy("updated_at DESC, id DESC")
+	b.OrderBy(sortOrderSQL(sortBy, sortOrder))
 
 	// Fetch limit+1 to detect whether a next page exists.
 	if p.Limit > 0 {

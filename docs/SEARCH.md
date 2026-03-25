@@ -70,7 +70,9 @@ All filters (except `group`) are optional and are combined with `AND`.
 | `raw` | boolean | If `true`, include the full `raw` JSONB field in the response. Default: `false`. |
 | `status_raw` | boolean | If `true`, include the `status_raw` JSONB field (Kubernetes status subtree). Default: `false`. |
 | `limit` | integer | Page size. Default: `100`. Minimum: `1`, Maximum: `5000`. |
-| `cursor` | base64 string | Keyset cursor for pagination (opaque token returned by previous response). |
+| `sort_by` | string | Sort column for results. One of: `resource` (default), `created_at`, `updated_at`, `global_uid`, `composition_id`. See [Sorting](#sorting-list-only). |
+| `sort_order` | string | Sort direction: `asc` or `desc`. Default depends on `sort_by`: `created_at` and `updated_at` default to `desc`, all others default to `asc`. See [Sorting](#sorting-list-only). |
+| `cursor` | base64 string | Keyset cursor for pagination (opaque token returned by previous response). Sort-aware: a cursor from one `sort_by`/`sort_order` combination cannot be reused with a different one. |
 
 If `since` is not valid RFC3339, `labels` is not valid JSON, or `composition_id` is not a valid UUID, the API returns a `400` error.
 If `cursor` is invalid base64/JSON, the API returns a `400` error.
@@ -96,6 +98,8 @@ Example body:
   "since": "2026-03-01T00:00:00Z",
   "raw": true,
   "status_raw": true,
+  "sort_by": "updated_at",
+  "sort_order": "desc",
   "limit": 100,
   "cursor": "<cursor-from-previous-page>"
 }
@@ -109,6 +113,8 @@ Notes:
 - `limit` defaults to `100` when omitted or `<= 0`.
 - `raw` defaults to `false` when omitted.
 - `status_raw` defaults to `false` when omitted.
+- `sort_by` defaults to `resource` when omitted.
+- `sort_order` defaults to a sensible direction per `sort_by` column when omitted (`desc` for `created_at`/`updated_at`, `asc` for all others).
 
 ### List Response
 
@@ -283,13 +289,13 @@ curl --request POST "http://localhost:8080/resources" \
 
 ### Pagination (list only)
 
-Uses keyset pagination with fixed order: `updated_at DESC, id DESC`.
+Uses keyset pagination. The cursor encodes the sort-relevant columns of the last returned row and is opaque to clients (base64-encoded JSON).
 
 1. First call without `cursor`.
 2. Read `cursor` from response.
-3. Send it back in the next call.
+3. Send it back in the next call (with the **same `sort_by` and `sort_order`**).
 
-The cursor is built from the last returned row (`updated_at`, `id`) and is opaque to clients (base64-encoded JSON).
+The cursor is sort-aware: it is only valid for the `sort_by` and `sort_order` combination that produced it. Changing either between pages returns `400`.
 
 When there are no more pages, the `cursor` field is absent in the response.
 
@@ -381,7 +387,98 @@ RBAC is enforced on every request.
 
 ### Sorting (list only)
 
-TODO
+Control the order of results with `sort_by` (which column) and `sort_order` (which direction).
+
+#### Sort columns (`sort_by`)
+
+| Value | SQL ORDER BY columns | Default direction | Description |
+| --- | --- | --- | --- |
+| `resource` (default) | `resource_group, resource_version, resource_plural, namespace, resource_name, id` | `asc` | Lexicographic by fully-qualified resource identity |
+| `created_at` | `created_at, id` | `desc` | By creation time (newest first by default) |
+| `updated_at` | `updated_at, id` | `desc` | By last update time (newest first by default) |
+| `global_uid` | `global_uid, id` | `asc` | By composite key (`cluster:uid`) |
+| `composition_id` | `composition_id, id` | `asc` | By composition UUID; NULL handling depends on direction |
+
+Every sort order includes `id` as a tiebreaker to guarantee a deterministic, stable order even when the primary sort column has duplicate values.
+
+#### Sort direction (`sort_order`)
+
+| Value | Description |
+| --- | --- |
+| `asc` | Ascending order (smallest/oldest first) |
+| `desc` | Descending order (largest/newest first) |
+| *(omitted)* | Uses the default direction for the chosen `sort_by` column (see table above) |
+
+You can override the default direction by explicitly passing `sort_order`. For example, `sort_by=created_at&sort_order=asc` returns oldest resources first (reversing the default `desc`).
+
+#### NULL handling
+
+`composition_id` is the only nullable sort column. With `asc` (default), NULLs sort **after** all non-NULL values (`NULLS LAST`). With `desc`, NULLs sort **before** all non-NULL values (`NULLS FIRST`). When paginating across the NULL boundary, the cursor tracks whether the last row had a NULL `composition_id` so pagination continues correctly.
+
+#### Invalid values
+
+An unrecognised `sort_by` value returns `400 Bad Request`. An unrecognised `sort_order` value (anything other than `asc`, `desc`, or empty) also returns `400 Bad Request`.
+
+#### Examples
+
+```bash
+# Sort by most recently updated (default direction: desc)
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "resource=deployments" \
+  --data-urlencode "sort_by=updated_at"
+
+# Sort by creation time ascending (oldest first, overriding default desc)
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "resource=deployments" \
+  --data-urlencode "sort_by=created_at" \
+  --data-urlencode "sort_order=asc" \
+  --data-urlencode "limit=50"
+
+# Sort by composition_id (default: ASC, NULLs last)
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=widgets.templates.krateo.io" \
+  --data-urlencode "version=v1beta1" \
+  --data-urlencode "resource=panels" \
+  --data-urlencode "sort_by=composition_id"
+
+# Sort by resource name descending (overriding default asc)
+curl --get "http://localhost:8080/resources" \
+  --data-urlencode "group=apps" \
+  --data-urlencode "version=v1" \
+  --data-urlencode "resource=deployments" \
+  --data-urlencode "sort_by=resource" \
+  --data-urlencode "sort_order=desc"
+
+# POST with sort_by and sort_order
+curl --request POST "http://localhost:8080/resources" \
+  --header "Content-Type: application/json" \
+  --data '{
+    "group": "apps",
+    "version": "v1",
+    "resource": "deployments",
+    "sort_by": "created_at",
+    "sort_order": "asc",
+    "limit": 100
+  }'
+```
+
+#### Cursor and sort compatibility
+
+Cursors are bound to the `sort_by` **and** `sort_order` that produced them. If you change either between pages, the API returns `400`:
+
+```
+cursor was created with sort_by="updated_at" but request uses sort_by="created_at"; cursors are not reusable across sort orders
+```
+
+```
+cursor was created with sort_order="desc" but request uses sort_order="asc"; cursors are not reusable across sort orders
+```
+
+To change sort column or direction, start a new pagination sequence (omit `cursor`).
 
 ---
 

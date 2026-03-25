@@ -9,7 +9,8 @@ Read-only HTTP API for querying current Kubernetes resource state stored in Post
 Key features:
 - **GET and POST** query support with filter capabilities to get lists of resources matching criteria
 - **Single-resource detail** endpoint via `global_uid`
-- **Keyset pagination** (`updated_at DESC, id DESC`) for stable, efficient paging
+- **Configurable sorting** via `sort_by` parameter (`resource`, `created_at`, `updated_at`, `global_uid`, `composition_id`) with optional `sort_order` (`asc`, `desc`)
+- **Keyset pagination** for stable, efficient paging (cursor is sort-order-aware)
 - **Dynamic resource resolution** via `group` (required) plus optional `version` and `resource` filters: discovery-based, no static registry needed
 - **JSONB label filtering** via PostgreSQL containment (`@>`)
 - **Batch RBAC enforcement** via discovery → RBAC batch check → filtered query
@@ -50,7 +51,7 @@ All filters are optional (except `group`) and combined with `AND`.
 | `raw` | boolean | Include full Kubernetes object (default: `false`) |
 | `status_raw` | boolean | Include Kubernetes status subtree (default: `false`) |
 | `limit` | integer | Page size (default: `100`). Minimum: `1`, Maximum: `5000`. |
-| `cursor` | base64 | Opaque keyset cursor from previous response |
+| `cursor` | base64 | Opaque keyset cursor from previous response. Cursor is sort-aware: a cursor from one `sort_by`/`sort_order` combination cannot be reused with a different one. |
 
 GET uses query parameters. POST uses the same fields as a JSON body (with `labels` as a JSON object, not a string). Note: `kind` is not a query parameter: the `resource` (plural) field is used for filtering. Only `group` is required; all other fields are optional.
 
@@ -108,6 +109,12 @@ The `namespace` parameter follows Kubernetes API semantics:
 | `prod`, `krateo-system`, etc. | Exact match on the specified namespace |
 
 This mirrors how `kubectl` works: commands target the `default` namespace unless `-n` or `--all-namespaces` is specified.
+
+#### Sorting
+
+The `sort_by` parameter controls which column(s) results are sorted by. The default is `resource` (`group`, `version`, `resource (plural)`, `namespace`, `name`). Other options are `created_at`, `updated_at`, `global_uid`, and `composition_id`.
+
+The `sort_order` parameter controls the direction: `asc` (ascending) or `desc` (descending). Each `sort_by` value has a sensible default direction: `created_at` and `updated_at` default to `desc` (newest first), all others default to `asc`. You can override this by explicitly passing `sort_order`.
 
 ---
 
@@ -210,7 +217,7 @@ See [TESTING.md](./docs/TESTING.md) for detailed testing instructions.
 **RBAC is enforced at resource level and not on the single object**.
 For instance, if a user has access to `widgets.templates.krateo.io/panels` in namespace `krateo-system` then they can see all the panels in that namespace.
 However, if they don't have access to `widgets.templates.krateo.io/panels` in `krateo-system` then they can't see any panel in that namespace, even if they have access to a specific panel object like `widgets.templates.krateo.io/panels/my-panel` in `krateo-system`.
-This practically means that RBAC is enforced on the resource type (group/version/resource) + namespaceand not on the single object and so for a user to have access to a specific object they need to have access to the whole resource type in that namespace.
+This practically means that RBAC is enforced on the resource type (group/version/resource) + namespace and not on the single object and so for a user to have access to a specific object they need to have access to the whole resource type in that namespace.
 
 ## Health Probes
 
