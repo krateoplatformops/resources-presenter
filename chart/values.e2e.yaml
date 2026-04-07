@@ -18,6 +18,8 @@ dbSecret:
 
 config:
   DEBUG: "true"
+  OTEL_ENABLED: "false"
+  OTEL_EXPORT_INTERVAL: "30s"
 
   # Database (matches deploy/test-postgres.yaml)
   DB_HOST: "postgres.krateo-system.svc.cluster.local" # must match the service name of the test PostgreSQL instance

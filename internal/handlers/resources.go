@@ -11,6 +11,7 @@ import (
 	xcontext "github.com/krateoplatformops/plumbing/context"
 	"github.com/krateoplatformops/plumbing/http/response"
 	"github.com/krateoplatformops/resources-presenter/internal/sql"
+	"github.com/krateoplatformops/resources-presenter/internal/telemetry"
 )
 
 const (
@@ -23,9 +24,10 @@ const (
 
 // resourceHandler groups shared dependencies for the resources HTTP handlers (list and detail).
 type resourceHandler struct {
-	db   *pgxpool.Pool
-	log  *slog.Logger
-	auth Authorizer
+	db      *pgxpool.Pool
+	log     *slog.Logger
+	auth    Authorizer
+	metrics *telemetry.Metrics
 }
 
 // requestCtx groups per-request state passed through handler phases.
@@ -66,8 +68,8 @@ type requestCtx struct {
 // Note: an empty result set returns 200 with an empty items array,
 // not 404. This is consistent with Kubernetes LIST semantics: the resource kind
 // is valid, there are just no instances matching the filters.
-func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.HandlerFunc {
-	h := &resourceHandler{db: db, log: log, auth: auth}
+func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer, metrics *telemetry.Metrics) http.HandlerFunc {
+	h := &resourceHandler{db: db, log: log, auth: auth, metrics: metrics}
 	return h.handleResources
 }
 
@@ -90,12 +92,20 @@ func ResourcesHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.
 func (h *resourceHandler) handleResources(w http.ResponseWriter, r *http.Request) {
 	traceID := xcontext.TraceId(r.Context(), false)
 
-	hl := newHandlerLogger(h.log, r, "resources", traceID)
+	hl := newHandlerLogger(h.log, r, "resources", traceID, h.metrics)
 	defer hl.emit()
+	defer func() {
+		status := hl.StatusCode
+		if status == 0 {
+			status = http.StatusInternalServerError
+		}
+		h.metrics.RecordHTTPRequest(r.Context(), hl.handler, r.Method, status, time.Since(hl.start))
+	}()
 
 	// Only GET and POST are allowed.
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		hl.StatusCode = http.StatusMethodNotAllowed
+		h.metrics.IncHTTPError(r.Context(), hl.handler, r.Method, "method_not_allowed", http.StatusMethodNotAllowed)
 		w.Header().Set("Allow", "GET, POST")
 		response.Encode(w, response.New(http.StatusMethodNotAllowed, fmt.Errorf("method not allowed")))
 		return
@@ -151,6 +161,7 @@ func resourcesParse(rc *requestCtx, r *http.Request) (sql.ListParams, bool) {
 	if parseErr != nil {
 		rc.hl.StatusCode = parseErr.status
 		rc.hl.Err = fmt.Errorf("%s", parseErr.msg)
+		rc.hl.metrics.IncHTTPError(r.Context(), rc.hl.handler, r.Method, "invalid_params", parseErr.status)
 		response.Encode(rc.w, response.New(parseErr.status, fmt.Errorf("%s", parseErr.msg)))
 		return sql.ListParams{}, false
 	}
@@ -168,6 +179,7 @@ func (h *resourceHandler) resourcesDiscover(ctx context.Context, rc *requestCtx,
 		h.log.Debug("discovery error", slog.Any("err", err), slog.String("trace_id", rc.traceID))
 		rc.hl.Err = err
 		rc.hl.StatusCode = http.StatusInternalServerError
+		h.metrics.IncHTTPError(ctx, rc.hl.handler, rc.hl.r.Method, "discovery_error", http.StatusInternalServerError)
 		response.InternalError(rc.w, fmt.Errorf("internal server error"))
 		return nil, false
 	}
@@ -179,6 +191,7 @@ func (h *resourceHandler) resourcesDiscover(ctx context.Context, rc *requestCtx,
 		writeJSON(rc.w, h.log, rc.traceID, emptyListResult)
 		return nil, false
 	}
+	h.metrics.AddDiscoveredTargets(ctx, rc.hl.handler, int64(len(discovered)))
 	h.log.Debug("discovery found targets", slog.Int("count", len(discovered)), slog.String("gvr", rc.gvr), slog.String("trace_id", rc.traceID))
 	return discovered, true
 }
@@ -193,9 +206,11 @@ func (h *resourceHandler) resourcesRBAC(ctx context.Context, rc *requestCtx, dis
 	if len(allowed) == 0 {
 		h.log.Debug("RBAC filter excluded all targets", slog.String("gvr", rc.gvr), slog.String("trace_id", rc.traceID))
 		rc.hl.StatusCode = http.StatusForbidden
+		h.metrics.IncHTTPError(ctx, rc.hl.handler, rc.hl.r.Method, "rbac_denied", http.StatusForbidden)
 		response.Encode(rc.w, response.New(http.StatusForbidden, fmt.Errorf("forbidden: insufficient permissions")))
 		return nil, false
 	}
+	h.metrics.AddAllowedTargets(ctx, rc.hl.handler, int64(len(allowed)))
 	h.log.Debug("RBAC filter allowed some targets", slog.Int("allowed_count", len(allowed)), slog.Int("discovered_count", len(discovered)), slog.String("gvr", rc.gvr), slog.String("trace_id", rc.traceID))
 	return allowed, true
 }
@@ -210,6 +225,7 @@ func (h *resourceHandler) resourcesQuery(ctx context.Context, rc *requestCtx, pa
 		h.log.Debug("list query error", slog.Any("err", err), slog.String("trace_id", rc.traceID))
 		rc.hl.Err = err
 		rc.hl.StatusCode = http.StatusInternalServerError
+		h.metrics.IncHTTPError(ctx, rc.hl.handler, rc.hl.r.Method, "query_error", http.StatusInternalServerError)
 		response.InternalError(rc.w, fmt.Errorf("internal server error"))
 		return nil, false
 	}
@@ -225,6 +241,7 @@ func (h *resourceHandler) serializeResponse(rc *requestCtx, phaseLabel string, r
 		h.log.Debug("response serialization error", slog.Any("err", err), slog.String("trace_id", rc.traceID))
 		rc.hl.Err = fmt.Errorf("serialize: %w", err)
 		rc.hl.StatusCode = http.StatusInternalServerError
+		h.metrics.IncHTTPError(rc.hl.r.Context(), rc.hl.handler, rc.hl.r.Method, "serialize_error", http.StatusInternalServerError)
 		response.InternalError(rc.w, fmt.Errorf("response serialization failed"))
 		rc.hl.addPhase(phaseLabel, time.Since(serStart))
 		return
@@ -233,6 +250,7 @@ func (h *resourceHandler) serializeResponse(rc *requestCtx, phaseLabel string, r
 	rc.hl.Extra = append(rc.hl.Extra, slog.Int("response_size_bytes", len(data)))
 	rc.hl.StatusCode = http.StatusOK
 	rc.hl.RowsReturned = len(result.Items)
+	h.metrics.AddResourcesReturned(rc.hl.r.Context(), rc.hl.handler, rc.hl.r.Method, int64(len(result.Items)))
 	rc.hl.addPhase(phaseLabel, time.Since(serStart))
 }
 
@@ -251,8 +269,8 @@ func (h *resourceHandler) serializeResponse(rc *requestCtx, phaseLabel string, r
 //  4. Serialize and return response
 //
 // Returns 400 for missing global_uid, 404 if not found, 403 if RBAC denied.
-func ResourceDetailHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) http.HandlerFunc {
-	h := &resourceHandler{db: db, log: log, auth: auth}
+func ResourceDetailHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer, metrics *telemetry.Metrics) http.HandlerFunc {
+	h := &resourceHandler{db: db, log: log, auth: auth, metrics: metrics}
 	return h.handleResourceDetail
 }
 
@@ -260,11 +278,19 @@ func ResourceDetailHandler(db *pgxpool.Pool, log *slog.Logger, auth Authorizer) 
 func (h *resourceHandler) handleResourceDetail(w http.ResponseWriter, r *http.Request) {
 	traceID := xcontext.TraceId(r.Context(), false)
 
-	hl := newHandlerLogger(h.log, r, "resource_detail", traceID)
+	hl := newHandlerLogger(h.log, r, "resource_detail", traceID, h.metrics)
 	defer hl.emit()
+	defer func() {
+		status := hl.StatusCode
+		if status == 0 {
+			status = http.StatusInternalServerError
+		}
+		h.metrics.RecordHTTPRequest(r.Context(), hl.handler, r.Method, status, time.Since(hl.start))
+	}()
 
 	if r.Method != http.MethodGet {
 		hl.StatusCode = http.StatusMethodNotAllowed
+		h.metrics.IncHTTPError(r.Context(), hl.handler, r.Method, "method_not_allowed", http.StatusMethodNotAllowed)
 		w.Header().Set("Allow", "GET")
 		response.Encode(w, response.New(http.StatusMethodNotAllowed, fmt.Errorf("method not allowed")))
 		return
@@ -304,6 +330,7 @@ func detailParse(w http.ResponseWriter, r *http.Request, hl *handlerLogger) (glo
 	if globalUID == "" {
 		hl.addPhase("1_parse", time.Since(parseStart))
 		hl.StatusCode = http.StatusBadRequest
+		hl.metrics.IncHTTPError(r.Context(), hl.handler, r.Method, "invalid_params", http.StatusBadRequest)
 		response.Encode(w, response.New(http.StatusBadRequest, fmt.Errorf("global_uid path parameter is required")))
 		return "", false, false, false
 	}
@@ -329,6 +356,7 @@ func (h *resourceHandler) detailQuery(ctx context.Context, rc *requestCtx, inclu
 		h.log.Debug("DB query error", slog.Any("err", err), slog.String("global_uid", rc.globalUID), slog.String("trace_id", rc.traceID))
 		rc.hl.Err = err
 		rc.hl.StatusCode = http.StatusInternalServerError
+		h.metrics.IncHTTPError(ctx, rc.hl.handler, rc.hl.r.Method, "query_error", http.StatusInternalServerError)
 		response.InternalError(rc.w, fmt.Errorf("internal server error"))
 		return nil, false
 	}
@@ -336,6 +364,7 @@ func (h *resourceHandler) detailQuery(ctx context.Context, rc *requestCtx, inclu
 	if result.Count == 0 {
 		h.log.Debug("resource not found", slog.String("global_uid", rc.globalUID), slog.String("trace_id", rc.traceID))
 		rc.hl.StatusCode = http.StatusNotFound
+		h.metrics.IncHTTPError(ctx, rc.hl.handler, rc.hl.r.Method, "not_found", http.StatusNotFound)
 		response.Encode(rc.w, response.New(http.StatusNotFound, fmt.Errorf("resource not found: %s", rc.globalUID)))
 		return nil, false
 	}
@@ -343,6 +372,7 @@ func (h *resourceHandler) detailQuery(ctx context.Context, rc *requestCtx, inclu
 		h.log.Error("unexpected multiple results for global_uid", slog.String("global_uid", rc.globalUID), slog.Int("count", result.Count), slog.String("trace_id", rc.traceID))
 		rc.hl.Err = fmt.Errorf("unexpected multiple results for global_uid %s", rc.globalUID)
 		rc.hl.StatusCode = http.StatusInternalServerError
+		h.metrics.IncHTTPError(ctx, rc.hl.handler, rc.hl.r.Method, "multiple_results", http.StatusInternalServerError)
 		response.InternalError(rc.w, fmt.Errorf("internal server error"))
 		return nil, false
 	}
@@ -362,9 +392,11 @@ func (h *resourceHandler) detailRBAC(ctx context.Context, rc *requestCtx, item s
 	if len(allowed) == 0 {
 		h.log.Debug("RBAC denied access to resource", slog.String("global_uid", rc.globalUID), slog.String("trace_id", rc.traceID))
 		rc.hl.StatusCode = http.StatusForbidden
+		h.metrics.IncHTTPError(ctx, rc.hl.handler, rc.hl.r.Method, "rbac_denied", http.StatusForbidden)
 		response.Encode(rc.w, response.New(http.StatusForbidden, fmt.Errorf("forbidden: insufficient permissions")))
 		return false
 	}
+	h.metrics.AddAllowedTargets(ctx, rc.hl.handler, int64(len(allowed)))
 	h.log.Debug("RBAC allowed access to resource", slog.String("global_uid", rc.globalUID), slog.String("trace_id", rc.traceID))
 	return true
 }

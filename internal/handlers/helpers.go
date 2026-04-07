@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/krateoplatformops/resources-presenter/internal/sql"
+	"github.com/krateoplatformops/resources-presenter/internal/telemetry"
 )
 
 // uuidRegex validates UUID format (RFC 4122).
@@ -134,6 +135,7 @@ type handlerLogger struct {
 	start   time.Time
 	handler string
 	traceID string
+	metrics *telemetry.Metrics
 
 	StatusCode   int
 	RowsReturned int
@@ -152,13 +154,14 @@ type phaseEntry struct {
 	Duration time.Duration
 }
 
-func newHandlerLogger(log *slog.Logger, r *http.Request, handler, traceID string) *handlerLogger {
+func newHandlerLogger(log *slog.Logger, r *http.Request, handler, traceID string, metrics *telemetry.Metrics) *handlerLogger {
 	return &handlerLogger{
 		log:     log,
 		r:       r,
 		start:   time.Now(),
 		handler: handler,
 		traceID: traceID,
+		metrics: metrics,
 	}
 }
 
@@ -205,4 +208,5 @@ func (h *handlerLogger) emit() {
 // addPhase records a named phase duration.
 func (h *handlerLogger) addPhase(label string, d time.Duration) {
 	h.Phases = append(h.Phases, phaseEntry{Label: label, Duration: d})
+	h.metrics.RecordHTTPPhaseDuration(h.r.Context(), h.handler, label, d)
 }

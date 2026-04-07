@@ -101,7 +101,7 @@ func TestResourcesPagination_MultiPage(t *testing.T) {
 		Delta:           time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	const pageSize = 100
 
@@ -190,7 +190,7 @@ func TestResourcesFilter_NamespaceAndCluster(t *testing.T) {
 		Delta:           time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Filter by cluster + namespace (namespace is now required).
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
@@ -253,7 +253,7 @@ func TestResourcesRawFlag(t *testing.T) {
 		Delta:           time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Without raw: items should have no raw field.
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
@@ -296,7 +296,7 @@ func TestResourcesRawFlag(t *testing.T) {
 func TestResourcesMissingGroup(t *testing.T) {
 	db := testDB(t)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// No params at all — group is required.
 	req := httptest.NewRequest("GET", "/resources", nil)
@@ -330,7 +330,7 @@ func TestResourcesRBACDenied(t *testing.T) {
 		Delta:           time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger(), denyAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), denyAllAuthorizer{}, nil)
 
 	req := httptest.NewRequest("GET", deploymentQuery(map[string]string{"namespace": "default"}), nil)
 	rec := httptest.NewRecorder()
@@ -372,7 +372,7 @@ func TestResourcesFilter_NameContains(t *testing.T) {
 		},
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Search for "api" — should match "my-api-service", "api-gateway", "API-v2" (case-insensitive).
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
@@ -430,7 +430,7 @@ func TestResourcesFilter_NameExact(t *testing.T) {
 		},
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Exact match: only "api-gateway" should be returned.
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
@@ -472,7 +472,7 @@ func TestResourcesFilter_NameExact(t *testing.T) {
 func TestResourcesFilter_NameAndNameContainsMutuallyExclusive(t *testing.T) {
 	db := testDB(t)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// GET with both name and name_contains should return 400.
 	req := httptest.NewRequest("GET",
@@ -510,7 +510,7 @@ func TestResourcesFilter_Labels(t *testing.T) {
 		},
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Filter by single label.
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
@@ -565,7 +565,7 @@ func TestResourcesFilter_Since(t *testing.T) {
 		Delta:           time.Hour,
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Since 5 hours ago: should get 5 resources (updated_at >= now-5h).
 	sinceTime := now.Add(-4*time.Hour - 30*time.Minute) // between res-4 and res-5
@@ -611,7 +611,7 @@ func TestResourcesPOST_BasicQuery(t *testing.T) {
 		Delta:           time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// POST with cluster filter.
 	resp := callResourcesPOST(t, handler, map[string]any{
@@ -677,7 +677,7 @@ func TestResourcesPOST_Pagination(t *testing.T) {
 		Delta:           time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Page 1.
 	resp := callResourcesPOST(t, handler, map[string]any{
@@ -716,7 +716,7 @@ func TestResourcesPOST_Pagination(t *testing.T) {
 func TestResourcesPOST_ValidationErrors(t *testing.T) {
 	db := testDB(t)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	tests := []struct {
 		name       string
@@ -785,7 +785,7 @@ func TestResourcesPOST_ValidationErrors(t *testing.T) {
 func TestResourcesMethodNotAllowed(t *testing.T) {
 	db := testDB(t)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	for _, method := range []string{"PUT", "DELETE", "PATCH"} {
 		req := httptest.NewRequest(method, deploymentQuery(map[string]string{"namespace": "default"}), nil)
@@ -1336,7 +1336,7 @@ func TestResourcesPOST_RBACDenied(t *testing.T) {
 		Delta:           time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger(), denyAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), denyAllAuthorizer{}, nil)
 
 	body := `{"group":"apps","version":"v1","resource":"deployments","namespace":"default"}`
 	req := httptest.NewRequest("POST", "/resources", strings.NewReader(body))
@@ -1380,7 +1380,7 @@ func TestRBAC_PartialNamespaceAccess(t *testing.T) {
 	auth := selectiveAuthorizer{Allowed: []sqlpkg.ResourceTarget{
 		{Group: "apps", Resource: "deployments", Namespace: "prod"},
 	}}
-	handler := ResourcesHandler(db, testLogger(), auth)
+	handler := ResourcesHandler(db, testLogger(), auth, nil)
 
 	// namespace=* so discovery finds both namespaces, but RBAC filters staging out.
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
@@ -1427,7 +1427,7 @@ func TestRBAC_PartialResourceTypeAccess(t *testing.T) {
 	}}
 
 	// Query with group that spans both — but since discovery is per-group, query panels only.
-	handler := ResourcesHandler(db, testLogger(), auth)
+	handler := ResourcesHandler(db, testLogger(), auth, nil)
 	resp := callResourcesGET(t, handler, "widgets.templates.krateo.io", "v1beta1", "panels", map[string]string{
 		"namespace": "prod",
 	})
@@ -1437,7 +1437,7 @@ func TestRBAC_PartialResourceTypeAccess(t *testing.T) {
 	}
 
 	// Deployments should be denied (403) since no RBAC access.
-	handlerDeploy := ResourcesHandler(db, testLogger(), auth)
+	handlerDeploy := ResourcesHandler(db, testLogger(), auth, nil)
 	req := httptest.NewRequest("GET", deploymentQuery(map[string]string{"namespace": "prod"}), nil)
 	rec := httptest.NewRecorder()
 	handlerDeploy.ServeHTTP(rec, req)
@@ -1474,7 +1474,7 @@ func TestRBAC_PartialAccess_WithPagination(t *testing.T) {
 	auth := selectiveAuthorizer{Allowed: []sqlpkg.ResourceTarget{
 		{Group: "apps", Resource: "deployments", Namespace: "prod"},
 	}}
-	handler := ResourcesHandler(db, testLogger(), auth)
+	handler := ResourcesHandler(db, testLogger(), auth, nil)
 
 	// Paginate with limit=3, should collect exactly 10 items (prod only).
 	var (
@@ -1539,7 +1539,7 @@ func TestRBAC_AllDenied_MultiNamespace(t *testing.T) {
 	auth := selectiveAuthorizer{Allowed: []sqlpkg.ResourceTarget{
 		{Group: "apps", Resource: "deployments", Namespace: "sandbox"},
 	}}
-	handler := ResourcesHandler(db, testLogger(), auth)
+	handler := ResourcesHandler(db, testLogger(), auth, nil)
 
 	req := httptest.NewRequest("GET", deploymentQuery(map[string]string{"namespace": "*"}), nil)
 	rec := httptest.NewRecorder()
@@ -1570,7 +1570,7 @@ func TestRBAC_Detail_PartialAccess(t *testing.T) {
 	auth := selectiveAuthorizer{Allowed: []sqlpkg.ResourceTarget{
 		{Group: "apps", Resource: "deployments", Namespace: "staging"},
 	}}
-	handler := ResourceDetailHandler(db, testLogger(), auth)
+	handler := ResourceDetailHandler(db, testLogger(), auth, nil)
 
 	// The resource is in prod, user only has staging access → 403.
 	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-0000", nil)
@@ -1603,7 +1603,7 @@ func TestRBAC_Detail_AllowedNamespace(t *testing.T) {
 	auth := selectiveAuthorizer{Allowed: []sqlpkg.ResourceTarget{
 		{Group: "apps", Resource: "deployments", Namespace: "prod"},
 	}}
-	handler := ResourceDetailHandler(db, testLogger(), auth)
+	handler := ResourceDetailHandler(db, testLogger(), auth, nil)
 
 	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-0000", nil)
 	req.SetPathValue("global_uid", "cluster-a:uid-0000")
@@ -1645,7 +1645,7 @@ func TestResourceDetail_Found(t *testing.T) {
 		Delta:           time.Second,
 	})
 
-	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Fetch a specific resource by global_uid (format: cluster:uid).
 	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-0001", nil)
@@ -1702,7 +1702,7 @@ func TestResourceDetail_RawFalse(t *testing.T) {
 		Delta:           time.Second,
 	})
 
-	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-0000?raw=false", nil)
 	req.SetPathValue("global_uid", "cluster-a:uid-0000")
@@ -1730,7 +1730,7 @@ func TestResourceDetail_NotFound(t *testing.T) {
 
 	applySchema(t, db)
 
-	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	req := httptest.NewRequest("GET", "/resources/cluster-x:uid-missing", nil)
 	req.SetPathValue("global_uid", "cluster-x:uid-missing")
@@ -1761,7 +1761,7 @@ func TestResourceDetail_RBACDenied(t *testing.T) {
 		Delta:           time.Second,
 	})
 
-	handler := ResourceDetailHandler(db, testLogger(), denyAllAuthorizer{})
+	handler := ResourceDetailHandler(db, testLogger(), denyAllAuthorizer{}, nil)
 
 	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-0000", nil)
 	req.SetPathValue("global_uid", "cluster-a:uid-0000")
@@ -1776,7 +1776,7 @@ func TestResourceDetail_RBACDenied(t *testing.T) {
 func TestResourceDetail_MethodNotAllowed(t *testing.T) {
 	db := testDB(t)
 
-	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	req := httptest.NewRequest("POST", "/resources/cluster-a:uid-0000", nil)
 	req.SetPathValue("global_uid", "cluster-a:uid-0000")
@@ -1817,7 +1817,7 @@ INSERT INTO krateo_resources (
 		t.Fatal(err)
 	}
 
-	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-status-test", nil)
 	req.SetPathValue("global_uid", "cluster-a:uid-status-test")
@@ -1874,7 +1874,7 @@ func TestResourceDetail_StatusRawNull(t *testing.T) {
 		Delta:           time.Second,
 	})
 
-	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	req := httptest.NewRequest("GET", "/resources/cluster-a:uid-0000", nil)
 	req.SetPathValue("global_uid", "cluster-a:uid-0000")
@@ -1921,7 +1921,7 @@ func TestResourcesList_GlobalUIDInResponse(t *testing.T) {
 		Delta:           time.Second,
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
 		"namespace": "default",
@@ -1943,7 +1943,6 @@ func TestResourcesList_GlobalUIDInResponse(t *testing.T) {
 }
 
 // --- Helpers ---
-
 
 func applySchema(t testing.TB, db *pgxpool.Pool) {
 	t.Helper()
@@ -2430,7 +2429,7 @@ func TestResourcesSort_DefaultIsResource(t *testing.T) {
 		{Name: "bravo", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base.Add(2 * time.Hour), UpdatedAt: base.Add(2 * time.Hour)},
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Default sort (no sort_by param) should be resource order (group/version/plural/namespace/name ASC).
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
@@ -2462,7 +2461,7 @@ func TestResourcesSort_ByCreatedAt(t *testing.T) {
 		{Name: "middle", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base.Add(time.Hour), UpdatedAt: base.Add(5 * time.Hour)},
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
 		"namespace": "default",
@@ -2495,7 +2494,7 @@ func TestResourcesSort_ByUpdatedAt(t *testing.T) {
 		{Name: "recent", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base, UpdatedAt: base.Add(time.Hour)},
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
 		"namespace": "default",
@@ -2524,7 +2523,7 @@ func TestResourcesSort_ByGlobalUID(t *testing.T) {
 		{Name: "m-middle", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base, UpdatedAt: base},
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
 		"namespace": "default",
@@ -2558,7 +2557,7 @@ func TestResourcesSort_ByCompositionID_NullsLast(t *testing.T) {
 		{Name: "no-comp-2", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base, UpdatedAt: base, CompositionID: nil},
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
 		"namespace": "*",
@@ -2592,7 +2591,7 @@ func TestResourcesSort_ByCompositionID_NullsLast(t *testing.T) {
 func TestResourcesSort_InvalidValue(t *testing.T) {
 	db := testDB(t)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	req := httptest.NewRequest("GET", "/resources?group=apps&version=v1&resource=deployments&sort_by=invalid", nil)
 	rec := httptest.NewRecorder()
@@ -2617,7 +2616,7 @@ func TestResourcesSort_POST(t *testing.T) {
 		{Name: "new", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base.Add(time.Hour), UpdatedAt: base.Add(time.Hour)},
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	resp := callResourcesPOST(t, handler, map[string]any{
 		"group":     "apps",
@@ -2660,7 +2659,7 @@ func TestResourcesSort_PaginationConsistency(t *testing.T) {
 	}
 	seedSortable(t, db, resources)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Page through with limit=3 and sort_by=created_at.
 	var allNames []string
@@ -2736,7 +2735,7 @@ func TestResourcesSort_CompositionIDPaginationAcrossNullBoundary(t *testing.T) {
 	}
 	seedSortable(t, db, resources)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Page with limit=2 so we cross the NULL boundary.
 	var allNames []string
@@ -2805,7 +2804,7 @@ func TestResourcesSortOrder_CreatedAtAsc(t *testing.T) {
 		{Name: "new", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base.Add(2 * time.Hour), UpdatedAt: base.Add(2 * time.Hour)},
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// sort_by=created_at with sort_order=asc → oldest first (reverse of default).
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
@@ -2841,7 +2840,7 @@ func TestResourcesSortOrder_CreatedAtDefaultDesc(t *testing.T) {
 		{Name: "new", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base.Add(time.Hour), UpdatedAt: base.Add(time.Hour)},
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// sort_by=created_at without sort_order → default DESC (new first).
 	resp := callResourcesGET(t, handler, "apps", "v1", "deployments", map[string]string{
@@ -2858,7 +2857,7 @@ func TestResourcesSortOrder_CreatedAtDefaultDesc(t *testing.T) {
 func TestResourcesSortOrder_InvalidValue(t *testing.T) {
 	db := testDB(t)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	req := httptest.NewRequest("GET", "/resources?group=apps&version=v1&resource=deployments&sort_order=invalid", nil)
 	rec := httptest.NewRecorder()
@@ -2883,7 +2882,7 @@ func TestResourcesSortOrder_POST_CreatedAtAsc(t *testing.T) {
 		{Name: "new", Namespace: "default", Cluster: "c1", Group: "apps", Version: "v1", Kind: "Deployment", Plural: "deployments", CreatedAt: base.Add(time.Hour), UpdatedAt: base.Add(time.Hour)},
 	})
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	resp := callResourcesPOST(t, handler, map[string]any{
 		"group":      "apps",
@@ -2926,7 +2925,7 @@ func TestResourcesSortOrder_PaginationConsistencyAsc(t *testing.T) {
 	}
 	seedSortable(t, db, resources)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Page through with limit=3, sort_by=created_at, sort_order=asc.
 	var allNames []string

@@ -150,6 +150,15 @@ config:
   # Maximum time to wait for PostgreSQL to become ready
   DB_READY_TIMEOUT: "5m"
 
+  # Enable OpenTelemetry metrics exporter
+  OTEL_ENABLED: "false"
+
+  # OpenTelemetry metric export interval
+  OTEL_EXPORT_INTERVAL: "30s"
+
+  # OpenTelemetry Collector OTLP HTTP endpoint
+  # OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector-opentelemetry-collector.monitoring.svc.cluster.local:4318"
+
   # Extra query parameters appended to the PostgreSQL connection string.
   # pool_min_conns: pre-warm connections at startup to avoid cold-start latency spikes.
   DB_PARAMS: "sslmode=disable&connect_timeout=5&pool_min_conns=4"

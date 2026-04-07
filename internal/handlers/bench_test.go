@@ -43,7 +43,7 @@ func benchSeed(b *testing.B, count int) *pgxpool.Pool {
 func BenchmarkHandler_List_100_NoRaw(b *testing.B) {
 	db := benchSeed(b, 100)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -61,7 +61,7 @@ func BenchmarkHandler_List_100_NoRaw(b *testing.B) {
 func BenchmarkHandler_List_100_Raw(b *testing.B) {
 	db := benchSeed(b, 100)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -79,7 +79,7 @@ func BenchmarkHandler_List_100_Raw(b *testing.B) {
 func BenchmarkHandler_List_1000_NoRaw(b *testing.B) {
 	db := benchSeed(b, 1000)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -97,7 +97,7 @@ func BenchmarkHandler_List_1000_NoRaw(b *testing.B) {
 func BenchmarkHandler_List_1000_Raw(b *testing.B) {
 	db := benchSeed(b, 1000)
 
-	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -115,7 +115,7 @@ func BenchmarkHandler_List_1000_Raw(b *testing.B) {
 func BenchmarkHandler_Detail(b *testing.B) {
 	db := benchSeed(b, 100)
 
-	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{})
+	handler := ResourceDetailHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -134,7 +134,7 @@ func BenchmarkHandler_Detail(b *testing.B) {
 func BenchmarkHandler_Gzip_100_Raw(b *testing.B) {
 	db := benchSeed(b, 100)
 
-	inner := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	inner := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 	handler := Gzip()(inner)
 
 	b.ResetTimer()
@@ -156,7 +156,7 @@ func BenchmarkHandler_Gzip_100_Raw(b *testing.B) {
 func BenchmarkHandler_GzipCompressionRatio(b *testing.B) {
 	db := benchSeed(b, 100)
 
-	inner := ResourcesHandler(db, testLogger(), allowAllAuthorizer{})
+	inner := ResourcesHandler(db, testLogger(), allowAllAuthorizer{}, nil)
 
 	// Measure uncompressed size.
 	reqPlain := httptest.NewRequest("GET", "/resources?group=apps&version=v1&resource=deployments&namespace=default&limit=100&raw=true", nil)
