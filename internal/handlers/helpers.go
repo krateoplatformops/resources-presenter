@@ -138,7 +138,7 @@ type handlerLogger struct {
 	metrics *telemetry.Metrics
 
 	StatusCode   int
-	RowsReturned int
+	RowsReturned *int
 	Err          error
 
 	// Phases is an ordered list of (label, duration) pairs.
@@ -185,8 +185,8 @@ func (h *handlerLogger) emit() {
 		slog.String("trace_id", h.traceID),
 		slog.Int("status_code", h.StatusCode),
 	)
-	if h.RowsReturned > 0 {
-		attrs = append(attrs, slog.Int("rows_returned", h.RowsReturned))
+	if h.RowsReturned != nil { // add rows_returned only if set by handler (i.e. if we arrive at that point)
+		attrs = append(attrs, slog.Int("rows_returned", *h.RowsReturned))
 	}
 
 	// Build duration group from phases + total.

@@ -249,7 +249,8 @@ func (h *resourceHandler) serializeResponse(rc *requestCtx, phaseLabel string, r
 
 	rc.hl.Extra = append(rc.hl.Extra, slog.Int("response_size_bytes", len(data)))
 	rc.hl.StatusCode = http.StatusOK
-	rc.hl.RowsReturned = len(result.Items)
+	rowsReturned := len(result.Items)
+	rc.hl.RowsReturned = &rowsReturned
 	h.metrics.AddResourcesReturned(rc.hl.r.Context(), rc.hl.handler, rc.hl.r.Method, int64(len(result.Items)))
 	rc.hl.addPhase(phaseLabel, time.Since(serStart))
 }
