@@ -6,6 +6,8 @@ config:
   DB_HOST: pg-cluster-rw.krateo-system.svc.cluster.local
   DB_NAME: krateo-db
   DB_READY_TIMEOUT: "5m"
+  OTEL_ENABLED: "false"
+  OTEL_EXPORT_INTERVAL: "30s"
 
 ingress:
   enabled: true

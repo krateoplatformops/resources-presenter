@@ -17,6 +17,8 @@ const (
 	serviceName           = "resources-presenter"
 	defaultDbReadyTimeout = 5 * time.Minute
 	defaultDebug          = false
+	defaultOtelEnabled    = true
+	defaultOtelInterval   = 30 * time.Second
 )
 
 type Config struct {
@@ -24,6 +26,8 @@ type Config struct {
 	Debug          bool
 	DbURL          string
 	DbReadyTimeout time.Duration
+	OTelEnabled    bool
+	OTelInterval   time.Duration
 	Log            *slog.Logger
 
 	// SigningKey is the HMAC key used to validate JWT tokens.
@@ -97,6 +101,16 @@ func Setup() *Config {
 		"maximum time to wait for PostgreSQL to become ready",
 	)
 
+	cfgOTelEnabled := flag.Bool("otel-enabled",
+		env.Bool("OTEL_ENABLED", defaultOtelEnabled),
+		"enable OpenTelemetry metrics exporter",
+	)
+
+	cfgOTelInterval := flag.Duration("otel-export-interval",
+		env.Duration("OTEL_EXPORT_INTERVAL", defaultOtelInterval),
+		"OpenTelemetry metric export interval",
+	)
+
 	cfgjwtSignKey := flag.String("jwt-sign-key",
 		env.String("JWT_SIGN_KEY", ""),
 		"Signing key for JWT validation",
@@ -117,6 +131,8 @@ func Setup() *Config {
 	cfg.Port = *cfgPort
 	cfg.Debug = *cfgDebug
 	cfg.DbReadyTimeout = *cfgDbReadyTimeout
+	cfg.OTelEnabled = *cfgOTelEnabled
+	cfg.OTelInterval = *cfgOTelInterval
 	cfg.SigningKey = *cfgjwtSignKey
 	cfg.AuthnNS = *cfgAuthnNS
 	cfg.Log = logutil.New(serviceName, cfg.Debug)
