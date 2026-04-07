@@ -49,8 +49,9 @@ This is the only way to test the full authentication and RBAC flow.
 # cleanup any existing cluster with the same name
 kind delete cluster --name krateo-e2e
 
-# wait a few seconds to ensure all resources are cleaned up, then create a new cluster
+# Wait a few seconds to ensure all resources are cleaned up, then create a new cluster
 
+# Create a kind cluster
 kind create cluster --name krateo-e2e
 
 # Check cluster is running and kubectl context is set
