@@ -12,7 +12,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Cumulative count of successful and failed service startups since pod creation. Uses raw counter values (no rate/increase) because this metric is emitted exactly once at startup.",
+      "description": "Cumulative count of successful and failed service startups since pod creation. Uses raw counter values (no rate/increase) because this metric is emitted exactly once at startup. The line shows a step from 0 to 1 at the moment the process started.",
       "fieldConfig": {
         "defaults": {
           "unit": "short"
@@ -26,20 +26,6 @@
         "y": 0
       },
       "id": 1,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
       "targets": [
         {
           "expr": "sum(resources_presenter_startup_success_total)",
@@ -53,7 +39,7 @@
         }
       ],
       "title": "Startup",
-      "type": "stat"
+      "type": "timeseries"
     },
     {
       "datasource": {
@@ -116,7 +102,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "End-to-end HTTP handler latency at p50, p75, p95, and p99. Does NOT include time spent in upstream middleware (JWT validation, UserConfig). Custom histogram buckets (0.05 s … 10 s) provide accurate interpolation in the 1–6 s range.",
+      "description": "End-to-end HTTP handler latency at p50, p75, p95, and p99. Does NOT include upstream middleware time (JWT validation, UserConfig). Custom histogram buckets (0.05 s … 10 s) provide accurate interpolation across the 1–6 s hot range.",
       "fieldConfig": {
         "defaults": {
           "unit": "s"
@@ -125,7 +111,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 24,
         "x": 0,
         "y": 6
       },
@@ -160,7 +146,41 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "p95 latency broken down by handler phase. The \"total\" series is the overall handler latency (http.duration_seconds) and is the reference against which per-phase contributions can be compared. Custom histogram buckets (0.001 s … 10 s) resolve sub-millisecond phases (parse, serialize) and multi-second phases (rbac_authz, query).",
+      "description": "p50 handler latency split by phase. \"total\" comes from http.duration_seconds (the true end-to-end time). Per-phase series come from http.phase.duration_seconds. Custom buckets resolve phases from < 1 ms (parse) to > 3 s (rbac_authz).",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "id": 10,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, handler, phase) (rate(resources_presenter_http_phase_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{handler}} {{phase}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, handler) (rate(resources_presenter_http_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "total {{handler}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Handler Phase Latency (p50)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "p75 handler latency split by phase. \"total\" comes from http.duration_seconds (the true end-to-end time). Per-phase series come from http.phase.duration_seconds.",
       "fieldConfig": {
         "defaults": {
           "unit": "s"
@@ -171,18 +191,52 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 6
+        "y": 14
       },
-      "id": 5,
+      "id": 11,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.75, sum by (le, handler, phase) (rate(resources_presenter_http_phase_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{handler}} {{phase}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.75, sum by (le, handler) (rate(resources_presenter_http_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "total {{handler}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Handler Phase Latency (p75)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "p95 handler latency split by phase. \"total\" comes from http.duration_seconds (the true end-to-end time). Per-phase series come from http.phase.duration_seconds.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 22
+      },
+      "id": 12,
       "targets": [
         {
           "expr": "histogram_quantile(0.95, sum by (le, handler, phase) (rate(resources_presenter_http_phase_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p95 {{handler}} {{phase}}",
+          "legendFormat": "{{handler}} {{phase}}",
           "refId": "A"
         },
         {
           "expr": "histogram_quantile(0.95, sum by (le, handler) (rate(resources_presenter_http_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p95 total {{handler}}",
+          "legendFormat": "total {{handler}}",
           "refId": "B"
         }
       ],
@@ -194,7 +248,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Full latency distribution across all handler phases at p50, p75, p95, and p99. The \"total\" series (sourced from http.duration_seconds) is the true end-to-end handler time and serves as a reference ceiling. Per-phase series use http.phase.duration_seconds.",
+      "description": "p99 handler latency split by phase. \"total\" comes from http.duration_seconds (the true end-to-end time). Per-phase series come from http.phase.duration_seconds.",
       "fieldConfig": {
         "defaults": {
           "unit": "s"
@@ -203,54 +257,24 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 14
+        "w": 12,
+        "x": 12,
+        "y": 22
       },
-      "id": 9,
+      "id": 13,
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le, handler, phase) (rate(resources_presenter_http_phase_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p50 {{handler}} {{phase}}",
+          "expr": "histogram_quantile(0.99, sum by (le, handler, phase) (rate(resources_presenter_http_phase_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{handler}} {{phase}}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.75, sum by (le, handler, phase) (rate(resources_presenter_http_phase_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p75 {{handler}} {{phase}}",
-          "refId": "B"
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum by (le, handler, phase) (rate(resources_presenter_http_phase_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p95 {{handler}} {{phase}}",
-          "refId": "C"
-        },
-        {
-          "expr": "histogram_quantile(0.99, sum by (le, handler, phase) (rate(resources_presenter_http_phase_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p99 {{handler}} {{phase}}",
-          "refId": "D"
-        },
-        {
-          "expr": "histogram_quantile(0.50, sum by (le, handler) (rate(resources_presenter_http_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p50 total {{handler}}",
-          "refId": "E"
-        },
-        {
-          "expr": "histogram_quantile(0.75, sum by (le, handler) (rate(resources_presenter_http_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p75 total {{handler}}",
-          "refId": "F"
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum by (le, handler) (rate(resources_presenter_http_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p95 total {{handler}}",
-          "refId": "G"
-        },
-        {
           "expr": "histogram_quantile(0.99, sum by (le, handler) (rate(resources_presenter_http_duration_seconds_bucket[$__rate_interval])))",
-          "legendFormat": "p99 total {{handler}}",
-          "refId": "H"
+          "legendFormat": "total {{handler}}",
+          "refId": "B"
         }
       ],
-      "title": "Handler Phase Latency (p50 / p75 / p95 / p99)",
+      "title": "Handler Phase Latency (p99)",
       "type": "timeseries"
     },
     {
@@ -258,7 +282,90 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Rate of resources returned per second by each handler. Y-axis unit is \"short\" (SI-suffixed number/s) rather than ops because the metric counts domain objects, not operations.",
+      "description": "Average handler time decomposed into sequential phases as a stacked area chart. Because phases execute sequentially, average durations add up correctly: avg(phase_A) + avg(phase_B) + … ≈ avg(total). This is mathematically valid for averages but NOT for quantiles — do not stack the p50/p75/p95/p99 panels above. The dashed overlay is the true average total from http.duration_seconds and acts as a sanity-check ceiling.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 70,
+            "lineWidth": 1,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "custom.stacking",
+                "value": {
+                  "group": "A",
+                  "mode": "none"
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "custom.lineWidth",
+                "value": 2
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [10, 10],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "id": 14,
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(resources_presenter_http_phase_duration_seconds_sum[$__rate_interval]) / rate(resources_presenter_http_phase_duration_seconds_count[$__rate_interval])",
+          "legendFormat": "{{handler}} {{phase}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (handler) (rate(resources_presenter_http_duration_seconds_sum[$__rate_interval])) / sum by (handler) (rate(resources_presenter_http_duration_seconds_count[$__rate_interval]))",
+          "legendFormat": "avg total {{handler}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Phase Contribution — Average Breakdown (stacked)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "description": "Number of resources returned per Grafana step interval (increase, not rate). Values are whole-number counts of domain objects. Uses increase() so the Y-axis shows integers rather than a fractional per-second rate.",
       "fieldConfig": {
         "defaults": {
           "unit": "short"
@@ -269,12 +376,12 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 22
+        "y": 38
       },
       "id": 6,
       "targets": [
         {
-          "expr": "sum by (handler) (rate(resources_presenter_http_resources_returned_total[$__rate_interval]))",
+          "expr": "sum by (handler) (increase(resources_presenter_http_resources_returned_total[$__rate_interval]))",
           "legendFormat": "{{handler}}",
           "refId": "A"
         }
@@ -287,7 +394,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Rate of Kubernetes targets discovered (before RBAC) vs. allowed (after RBAC filtering) per second. A growing gap between discovered and allowed indicates increasing RBAC denials.",
+      "description": "Number of Kubernetes targets discovered (before RBAC) vs. allowed (after RBAC filtering) per Grafana step interval (increase, not rate). Values are whole-number counts. A growing gap between discovered and allowed indicates increasing RBAC denials.",
       "fieldConfig": {
         "defaults": {
           "unit": "short"
@@ -298,17 +405,17 @@
         "h": 7,
         "w": 12,
         "x": 12,
-        "y": 22
+        "y": 38
       },
       "id": 7,
       "targets": [
         {
-          "expr": "sum by (handler) (rate(resources_presenter_http_discovery_targets_total[$__rate_interval]))",
+          "expr": "sum by (handler) (increase(resources_presenter_http_discovery_targets_total[$__rate_interval]))",
           "legendFormat": "discovered {{handler}}",
           "refId": "A"
         },
         {
-          "expr": "sum by (handler) (rate(resources_presenter_http_rbac_targets_allowed_total[$__rate_interval]))",
+          "expr": "sum by (handler) (increase(resources_presenter_http_rbac_targets_allowed_total[$__rate_interval]))",
           "legendFormat": "allowed {{handler}}",
           "refId": "B"
         }
@@ -332,7 +439,7 @@
         "h": 7,
         "w": 12,
         "x": 0,
-        "y": 29
+        "y": 45
       },
       "id": 8,
       "targets": [
@@ -377,6 +484,6 @@
   "timezone": "browser",
   "title": "Resources Presenter Overview",
   "uid": "resources-presenter-overview",
-  "version": 2,
+  "version": 3,
   "weekStart": ""
 }
