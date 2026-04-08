@@ -11,9 +11,9 @@ In Prometheus, names are typically normalized with underscores (for example `res
 
 | Metric | Type | Unit | Description | Emitted from | PromQL example |
 |---|---|---|---|---|---|
-| `resources_presenter.startup.success` | Counter | count | Service startup completed successfully. | `main.go` | `sum(increase(resources_presenter_startup_success_total[1h]))` |
-| `resources_presenter.startup.failure` | Counter | count | Service startup failed. | `main.go` | `sum(increase(resources_presenter_startup_failure_total[1h]))` |
-| `resources_presenter.db.connect.duration_seconds` | Histogram | seconds | Time spent waiting for PostgreSQL readiness. | `main.go` | `histogram_quantile(0.95, sum by (le) (rate(resources_presenter_db_connect_duration_seconds_bucket[5m])))` |
+| `resources_presenter.startup.success` | Counter | count | Service startup completed successfully. | `main.go` | `sum(resources_presenter_startup_success_total)` |
+| `resources_presenter.startup.failure` | Counter | count | Service startup failed. | `main.go` | `sum(resources_presenter_startup_failure_total)` |
+| `resources_presenter.db.connect.duration_seconds` | Histogram | seconds | Time spent waiting for PostgreSQL readiness at startup. Recorded exactly once per pod start. | `main.go` | `histogram_quantile(0.95, sum by (le) (resources_presenter_db_connect_duration_seconds_bucket))` |
 | `resources_presenter.http.requests` | Counter | requests | Number of HTTP handler requests. Labels: `handler`, `method`, `status_code`. | `internal/handlers/resources.go` | `sum by (handler, method) (rate(resources_presenter_http_requests_total[5m]))` |
 | `resources_presenter.http.duration_seconds` | Histogram | seconds | HTTP handler latency. Labels: `handler`, `method`, `status_code`. | `internal/handlers/resources.go` | `histogram_quantile(0.95, sum by (le, handler) (rate(resources_presenter_http_duration_seconds_bucket[5m])))` |
 | `resources_presenter.http.resources_returned` | Counter | resources | Number of resources returned by handlers. Labels: `handler`, `method`. | `internal/handlers/resources.go` | `sum by (handler) (rate(resources_presenter_http_resources_returned_total[5m]))` |
