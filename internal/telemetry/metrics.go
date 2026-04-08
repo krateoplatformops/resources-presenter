@@ -13,6 +13,47 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 )
 
+// Histogram bucket boundaries, tuned to the observed latency distribution of this service.
+//
+// Problem with OTel Go SDK defaults: the default boundaries (in seconds) are
+// [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10].
+// When most observations fall in the single (2.5, 5] bucket, histogram_quantile
+// linearly interpolates inside that bucket and produces a constant ~4.75 s for every
+// quantile and every label combination — masking real per-phase and per-handler variation.
+
+// httpDurationBuckets is the explicit bucket set for resources_presenter.http.duration_seconds.
+//
+// Hot range: 1–6 s (total handler time, dominated by RBAC Kubernetes API and DB calls).
+// Fast tail: < 500 ms (cached / error-fast-path responses).
+// Slow tail: up to 10 s (degraded cluster or high DB load).
+var httpDurationBuckets = []float64{
+	0.05, 0.1, 0.25, 0.5, 0.75,
+	1.0, 1.5, 2.0, 2.5, 3.0,
+	3.5, 4.0, 4.5, 5.0, 6.0,
+	7.5, 10.0,
+}
+
+// phaseDurationBuckets is the explicit bucket set for resources_presenter.http.phase.duration_seconds.
+//
+// The boundaries are intentionally denser in the sub-100 ms range to capture fast
+// phases accurately, and sparser above 1 s where only slow phases land.
+var phaseDurationBuckets = []float64{
+	0.001, 0.005, 0.01, 0.025, 0.05,
+	0.1, 0.25, 0.5, 0.75, 1.0,
+	1.5, 2.0, 2.5, 3.0, 4.0,
+	5.0, 7.5, 10.0,
+}
+
+// dbConnectDurationBuckets is the explicit bucket set for resources_presenter.db.connect.duration_seconds.
+//
+// This histogram records a single observation per service startup (time spent waiting for
+// PostgreSQL to become ready). The range depends entirely on cluster conditions.
+var dbConnectDurationBuckets = []float64{
+	0.1, 0.25, 0.5, 1.0, 2.0,
+	3.0, 5.0, 10.0, 15.0, 20.0,
+	30.0,
+}
+
 type Config struct {
 	Enabled        bool
 	ServiceName    string
@@ -82,13 +123,19 @@ func newMetrics(meter metric.Meter) (*Metrics, error) {
 	if m.startupFailure, err = meter.Int64Counter("resources_presenter.startup.failure"); err != nil {
 		return nil, err
 	}
-	if m.dbConnectDurSecs, err = meter.Float64Histogram("resources_presenter.db.connect.duration_seconds"); err != nil {
+	if m.dbConnectDurSecs, err = meter.Float64Histogram(
+		"resources_presenter.db.connect.duration_seconds",
+		metric.WithExplicitBucketBoundaries(dbConnectDurationBuckets...),
+	); err != nil {
 		return nil, err
 	}
 	if m.httpRequests, err = meter.Int64Counter("resources_presenter.http.requests"); err != nil {
 		return nil, err
 	}
-	if m.httpDurSecs, err = meter.Float64Histogram("resources_presenter.http.duration_seconds"); err != nil {
+	if m.httpDurSecs, err = meter.Float64Histogram(
+		"resources_presenter.http.duration_seconds",
+		metric.WithExplicitBucketBoundaries(httpDurationBuckets...),
+	); err != nil {
 		return nil, err
 	}
 	if m.httpResources, err = meter.Int64Counter("resources_presenter.http.resources_returned"); err != nil {
@@ -97,7 +144,10 @@ func newMetrics(meter metric.Meter) (*Metrics, error) {
 	if m.httpErrors, err = meter.Int64Counter("resources_presenter.http.errors"); err != nil {
 		return nil, err
 	}
-	if m.httpPhaseDurSecs, err = meter.Float64Histogram("resources_presenter.http.phase.duration_seconds"); err != nil {
+	if m.httpPhaseDurSecs, err = meter.Float64Histogram(
+		"resources_presenter.http.phase.duration_seconds",
+		metric.WithExplicitBucketBoundaries(phaseDurationBuckets...),
+	); err != nil {
 		return nil, err
 	}
 	if m.httpDiscoveredTarget, err = meter.Int64Counter("resources_presenter.http.discovery.targets"); err != nil {
