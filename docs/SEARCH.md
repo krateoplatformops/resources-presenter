@@ -9,6 +9,7 @@ This document provides full examples for querying the `resources-presenter` API.
 | `GET` | `/resources` | List resources matching filters (query parameters) |
 | `POST` | `/resources` | List resources matching filters (JSON body) |
 | `GET` | `/resources/{global_uid}` | Get a single resource by `global_uid` |
+| `POST` | `/can-i` | Check a batch of permissions: see [CAN-I.md](./CAN-I.md) |
 
 ---
 

@@ -34,6 +34,50 @@ func (RbacAuthorizer) FilterAllowed(ctx context.Context, targets []sql.ResourceT
 	return filterByDecisions(targets, ucts, decisions)
 }
 
+// CanI reports, for each check, whether the current user may perform it.
+// For each distinct verb and group/resource, the cluster-wide permission is
+// checked first: a user who has it is allowed in every namespace, so those
+// checks need no per-namespace call.
+func (RbacAuthorizer) CanI(ctx context.Context, checks []rbac.UserCanTarget) []bool {
+	allowed := make([]bool, len(checks))
+	if len(checks) == 0 {
+		return allowed
+	}
+
+	seen := make(map[rbac.UserCanTarget]bool, len(checks))
+	clusterWide := make([]rbac.UserCanTarget, 0, len(checks))
+	for _, c := range checks {
+		cw := rbac.UserCanTarget{Verb: c.Verb, GroupResource: c.GroupResource}
+		if !seen[cw] {
+			seen[cw] = true
+			clusterWide = append(clusterWide, cw)
+		}
+	}
+	clusterDecisions := rbac.UserCan(ctx, clusterWide)
+
+	var pending []rbac.UserCanTarget
+	var pendingIdx []int
+	for i, c := range checks {
+		if clusterDecisions[rbac.UserCanTarget{Verb: c.Verb, GroupResource: c.GroupResource}] {
+			allowed[i] = true
+			continue
+		}
+		if c.Namespace != "" {
+			pending = append(pending, c)
+			pendingIdx = append(pendingIdx, i)
+		}
+	}
+	if len(pending) == 0 {
+		return allowed
+	}
+
+	decisions := rbac.UserCan(ctx, pending)
+	for j, c := range pending {
+		allowed[pendingIdx[j]] = decisions[c]
+	}
+	return allowed
+}
+
 // buildUserCanTargets converts resource targets to the plumbing RBAC format.
 // Verb is always "get". Version is intentionally excluded: Kubernetes RBAC
 // operates at the Group+Resource level, not Group+Version+Resource.

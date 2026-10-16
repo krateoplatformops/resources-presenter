@@ -191,3 +191,31 @@ func TestRbacAuthorizer_FilterAllowed_EmptyTargets(t *testing.T) {
 		t.Fatalf("expected nil for zero-length targets, got %v", got)
 	}
 }
+
+// --- CanI ---
+
+func TestCanI_Empty(t *testing.T) {
+	got := RbacAuthorizer{}.CanI(context.Background(), nil)
+	if len(got) != 0 {
+		t.Fatalf("expected empty result, got %v", got)
+	}
+}
+
+func TestCanI_NoUserConfigDeniesAll(t *testing.T) {
+	// Without a user config in the context, plumbing's UserCan denies everything.
+	gr := schema.GroupResource{Group: "apps", Resource: "deployments"}
+	checks := []plumbingRbac.UserCanTarget{
+		{Verb: "create", GroupResource: gr, Namespace: "a"},
+		{Verb: "create", GroupResource: gr},
+		{Verb: "create", GroupResource: gr, Namespace: "a"},
+	}
+	got := RbacAuthorizer{}.CanI(context.Background(), checks)
+	if len(got) != len(checks) {
+		t.Fatalf("expected %d decisions, got %d", len(checks), len(got))
+	}
+	for i, ok := range got {
+		if ok {
+			t.Fatalf("decision %d: expected denied", i)
+		}
+	}
+}

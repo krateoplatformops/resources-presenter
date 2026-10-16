@@ -44,6 +44,19 @@ The detail handler (`GET /resources/{global_uid}`) has a simpler pipeline: no di
 
 The detail handler skips discovery entirely: it fetches the resource first, then checks RBAC on the single result. This is faster than the list flow for single-resource lookups.
 
+## Can-i handler phases
+
+The can-i handler (`POST /can-i`) does not use the database.
+
+| Phase | Field | What it does | Typical latency |
+|-------|-------|-------------|-----------------|
+| 1 | `1_parse` | JSON body validation | < 1 ms |
+| 2 | `2_rbac_authz` | Cluster-wide `rbac.UserCan()` per distinct (verb, group, resource), then batch `rbac.UserCan()` for the rest: `SelfSubjectRulesReview` per namespace | 2 + N K8s calls (cached: 0) |
+| 3 | `3_serialize` | JSON marshaling into response buffer | < 1 ms |
+| - | `4_total` | Sum of phases 1-3 | - |
+
+See [CAN-I.md](./CAN-I.md#how-checks-are-resolved) for the call counts.
+
 ## UserConfig middleware
 
 The `UserConfig` middleware ([plumbing/server/use/userconfig.go](https://github.com/krateoplatformops/plumbing/blob/main/server/use/userconfig.go)) runs **before** the handler and performs two operations:
@@ -79,6 +92,7 @@ The Secret fetch is a network call to the K8s API and accounts for a large porti
 | 3_rbac_authz (handler) | K8s API: batch `SelfSubjectRulesReview` / `SelfSubjectAccessReview` |
 | 4_query (list handler) | PostgreSQL: filtered list query |
 | 2_query (detail handler) | PostgreSQL: `SELECT ... WHERE global_uid = $1` (single row) |
+| 2_rbac_authz (can-i handler) | K8s API: cluster-wide checks, then `SelfSubjectRulesReview` per namespace |
 | Other (parse + serialize) | None |
 
 The K8s API calls (`UserConfig` + `3_rbac_authz`) are independent operations against different endpoints: one fetches user credentials, the other checks RBAC permissions. For the **list handler**, the two PostgreSQL calls (`2_discovery` + `4_query`) are sequential: discovery must complete before the RBAC check, and the list query uses the RBAC-filtered targets. For the **detail handler**, there is only one PostgreSQL call (`2_query`) that fetches the resource directly, then RBAC is checked on the single result.

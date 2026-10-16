@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/krateoplatformops/plumbing/kubeutil/rbac"
 	"github.com/krateoplatformops/resources-presenter/internal/sql"
 	"github.com/krateoplatformops/resources-presenter/internal/telemetry"
 )
@@ -21,6 +22,13 @@ var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
 // returns only the targets the user is permitted to access.
 type Authorizer interface {
 	FilterAllowed(ctx context.Context, targets []sql.ResourceTarget) []sql.ResourceTarget
+}
+
+// PermissionChecker checks whether the current user may perform each of the
+// given checks. The result has one decision per check, in input order; any
+// error counts as denied.
+type PermissionChecker interface {
+	CanI(ctx context.Context, checks []rbac.UserCanTarget) []bool
 }
 
 // --- Shared helpers ---
