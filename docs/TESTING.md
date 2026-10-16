@@ -22,8 +22,11 @@ Integration tests use `testcontainers-go` to spin up a real PostgreSQL container
 **Requires:** Docker running.
 
 ```sh
-# Handler layer (pagination, filtering, sorting, RBAC mock, POST, validation, list + detail endpoints)
+# Handler layer (pagination, filtering, sorting, RBAC mock, POST, validation, list + detail + can-i endpoints)
 go test ./internal/handlers/ -v -cover
+
+# Can-i handler only (no Docker needed)
+go test ./internal/handlers/ -run CanI -v
 
 # All tests (unit + integration)
 go test ./... -v -cover
@@ -327,6 +330,23 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 # Detail: non-existent global_uid → 404
 curl -s -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/resources/nonexistent-cluster:nonexistent-uid' | jq
+
+# Can-i: bad verb → 400
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"checks": [{"verb": "*", "resource": "panels"}]}' http://localhost:8080/can-i | jq
+```
+
+**Permission check** (`POST /can-i`, see [CAN-I.md](./CAN-I.md)):
+
+```sh
+# Expected: true, false (other namespace), false (verb not granted)
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"checks": [
+        {"verb": "get", "group": "widgets.templates.krateo.io", "resource": "panels", "namespace": "krateo-system"},
+        {"verb": "get", "group": "widgets.templates.krateo.io", "resource": "panels", "namespace": "demo-system"},
+        {"verb": "create", "group": "widgets.templates.krateo.io", "resource": "panels", "namespace": "krateo-system"}
+      ]}' \
+  http://localhost:8080/can-i | jq '[.items[].allowed]'
 ```
 
 Stop port-forwarding:
@@ -370,6 +390,11 @@ GLOBAL_UID=$(curl -s -H "Authorization: Bearer $TOKEN" \
   | jq -r '.items[0].global_uid')
 curl -s -H "Authorization: Bearer $TOKEN" \
   "http://localhost:8080/resources/$GLOBAL_UID" | jq
+
+# Permission check
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"checks": [{"verb": "get", "group": "widgets.templates.krateo.io", "resource": "panels", "namespace": "krateo-system"}]}' \
+  http://localhost:8080/can-i | jq
 
 # Teardown
 kind delete cluster --name krateo-e2e

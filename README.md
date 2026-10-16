@@ -25,6 +25,7 @@ Key features:
 | `GET` | `/resources` | List resources matching filters (query parameters) |
 | `POST` | `/resources` | List resources matching filters (JSON body) |
 | `GET` | `/resources/{global_uid}` | Get a single resource by `global_uid` |
+| `POST` | `/can-i` | Check a batch of permissions for the current user |
 
 ---
 
@@ -166,6 +167,37 @@ No `cursor` field: there is no pagination on the detail endpoint.
 
 ---
 
+### Permission Check Endpoint — `POST /can-i`
+
+Answers, in one call, whether the current user may perform each of a list of checks: a batch of SelfSubjectAccessReviews. It does not use the database.
+
+```json
+{"checks": [
+  {"verb": "create", "group": "composition.krateo.io", "resource": "cmtests", "namespace": "dev"},
+  {"verb": "list", "group": "apps", "resource": "deployments"}
+]}
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `verb` | yes | `get`, `list`, `watch`, `create`, `update`, `patch`, `delete` or `deletecollection` |
+| `group` | no | `""` is the core group |
+| `resource` | yes | plural resource name |
+| `namespace` | no | `""` or absent means all namespaces |
+
+At most 5000 checks per request. Object names and subresources are not supported.
+
+```json
+{"items": [
+  {"verb": "create", "group": "composition.krateo.io", "resource": "cmtests", "namespace": "dev", "allowed": true},
+  {"verb": "list", "group": "apps", "resource": "deployments", "namespace": "", "allowed": false}
+]}
+```
+
+Items are in request order. For each distinct verb and group/resource, the cluster-wide permission is checked first; a user who has it is allowed in every namespace with no further call. The remaining checks cost one SelfSubjectRulesReview per namespace, in sequence. An RBAC error counts as `allowed: false`. Decisions share the `/resources` RBAC cache, so a change to the user's RBAC can take up to the cache TTL to show.
+
+---
+
 ### Error Responses
 
 Kubernetes-style `Status` objects:
@@ -174,11 +206,13 @@ Kubernetes-style `Status` objects:
 | --- | --- | --- |
 | `400` | List | Invalid/missing parameters (missing group, bad UUID, JSON, timestamp, cursor) |
 | `400` | Detail | Missing `global_uid` path parameter |
+| `400` | Permission check | Invalid/missing fields, unknown field, bad verb, too many checks |
 | `403` | List | Forbidden: RBAC denied access to all discovered resources. If even one is allowed, the request will succeed with just those allowed. |
 | `403` | Detail | Forbidden: RBAC denied access to the requested resource |
 | `404` | Detail | Resource not found: no active resource matches the given `global_uid` |
 | `405` | List | Method not allowed (only GET and POST) |
 | `405` | Detail | Method not allowed (only GET) |
+| `405` | Permission check | Method not allowed (only POST) |
 | `500` | Both | Internal server error |
 
 See [SEARCH.md](./docs/SEARCH.md) for full examples including pagination loops.
